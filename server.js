@@ -45,14 +45,17 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-// --- 자동 경매 관리 시스템 (Scheduler) ---
-const MINIMUM_ACTIVE_AUCTIONS = 3;
+// =============================================
+// 자동 경매 관리 시스템 (Scheduler)
+// =============================================
+const MINIMUM_ACTIVE_AUCTIONS = 3; // 항상 유지할 최소 활성 경매 수
 
 async function manageAuctions() {
     console.log('[Scheduler] Running daily auction management task...');
     try {
         await db.query('BEGIN');
 
+        // 1. 종료 시간이 지난 경매들을 'ended' 상태로 변경하고, 최종 낙찰자 정보를 확정합니다.
         const endedResult = await db.query(
             "UPDATE auctions SET status = 'ended', final_bid = current_highest_bid, final_winner_id = current_winner_id WHERE end_time < NOW() AND status = 'active' RETURNING id"
         );
@@ -60,19 +63,22 @@ async function manageAuctions() {
             console.log(`[Scheduler] ${endedResult.rows.length} auctions have ended.`);
         }
 
+        // 2. 현재 활성 상태인 경매 수 확인
         const activeResult = await db.query("SELECT COUNT(*) FROM auctions WHERE status = 'active'");
         const activeCount = parseInt(activeResult.rows[0].count, 10);
         console.log(`[Scheduler] Found ${activeCount} active auctions.`);
 
+        // 3. 부족한 만큼 새로운 경매 생성
         let newAuctionsNeeded = MINIMUM_ACTIVE_AUCTIONS - activeCount;
         if (newAuctionsNeeded > 0) {
             console.log(`[Scheduler] Creating ${newAuctionsNeeded} new auctions...`);
+            // 3-1. 데이터베이스에 있는 가장 마지막 경매 날짜를 찾습니다.
             const lastAuctionRes = await db.query("SELECT MAX(id) as last_id FROM auctions");
             let lastDate = lastAuctionRes.rows[0].last_id ? new Date(lastAuctionRes.rows[0].last_id) : new Date();
 
             for (let i = 0; i < newAuctionsNeeded; i++) {
-                lastDate.setDate(lastDate.getDate() + 1);
-                const newAuctionId = lastDate.toISOString().slice(0, 10);
+                lastDate.setDate(lastDate.getDate() + 1); // 날짜를 하루씩 증가시킵니다.
+                const newAuctionId = lastDate.toISOString().slice(0, 10); // 'YYYY-MM-DD' 형식
 
                 const getAuctionEndTime = (dateStr) => {
                     const date = new Date(dateStr);
@@ -261,6 +267,10 @@ app.patch('/api/admin/ad-content/:id/status', async (req, res) => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`✅ Canvas X server is running on port ${PORT}`);
-    manageAuctions();
-    setInterval(manageAuctions, 3600 * 1000);
+    
+    // 서버가 시작되면 즉시 한 번 경매 상태를 점검하고,
+    manageAuctions(); 
+    
+    // 그 후 1시간마다 주기적으로 경매 상태를 점검하여 자동 관리합니다.
+    setInterval(manageAuctions, 3600 * 1000); // 1시간 = 3600초 * 1000ms
 });
