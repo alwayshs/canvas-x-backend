@@ -36,20 +36,19 @@ const app = express();
 // --- CORS 설정 (가장 중요) ---
 // Netlify에 배포된 당신의 웹사이트 주소를 여기에 정확하게 입력해야 합니다.
 const whitelist = ['http://localhost:3000', 'https://cool-semifreddo-6004a7.netlify.app'];
-const corsOptions = {
-    origin: function (origin, callback) {
-        if (!origin || whitelist.indexOf(origin) !== -1) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
-        }
-    },
-    credentials: true
-};
-app.use(cors(corsOptions));
-// ------------------------------------
 
-app.use(express.json());
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin || whitelist.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+};
+
+app.use(cors(corsOptions));
 
 // --- 파일 업로드 폴더 및 Multer 설정 ---
 const uploadDir = 'uploads';
