@@ -189,17 +189,69 @@ app.get('/api/users/:userId/won-auctions', async (req, res) => {
     }
 });
 
-// --- 4. 결제 API (시뮬레이션) ---
-app.post('/api/payments/confirm', async (req, res) => {
+// --- 4. 결제 API (실제 연동) ---
+
+// 결제 정보를 생성하고 클라이언트에 전달하는 API
+app.post('/api/payments/request', async (req, res) => {
     const { auctionId, userId } = req.body;
     try {
-        const result = await db.query(
-            "UPDATE auctions SET status = 'paid' WHERE id = $1 AND final_winner_id = $2 AND status = 'ended' RETURNING *",
+        // 실제 DB에서 낙찰 정보 확인 (상태가 'ended'이고, final_winner_id가 일치하는지)
+        const auctionResult = await db.query(
+            "SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 AND status = 'ended'",
             [auctionId, userId]
         );
-        if (result.rows.length === 0) throw new Error('결제할 수 없는 경매입니다.');
-        res.status(200).json({ message: '결제가 성공적으로 완료되었습니다.' });
+        const auction = auctionResult.rows[0];
+
+        if (!auction) {
+            return res.status(403).json({ message: '결제 대상 경매가 아니거나 권한이 없습니다.' });
+        }
+
+        // 클라이언트에게 토스페이먼츠 결제창을 띄우는 데 필요한 정보를 전달
+        res.json({
+            amount: auction.final_bid,
+            orderId: `canvasx_${auctionId}_${new Date().getTime()}`, // 고유한 주문 ID 생성
+            orderName: `Canvas X - ${auctionId} 광고권`
+        });
     } catch (error) {
+        console.error('Payment request error:', error);
+        res.status(500).json({ message: '결제 정보를 생성하는 중 오류가 발생했습니다.' });
+    }
+});
+
+// 토스페이먼츠 결제 성공 후, 최종 승인을 처리하는 API
+app.post('/api/payments/confirm', async (req, res) => {
+    const { paymentKey, orderId, amount } = req.body;
+    
+    // 실제 운영 시에는 환경 변수로 안전하게 관리해야 합니다.
+    const secretKey = process.env.TOSS_SECRET_KEY || 'YOUR_TOSS_PAYMENTS_SECRET_KEY';
+
+    try {
+        // 토스페이먼츠 서버에 결제 승인 요청
+        const response = await fetch('https://api.tosspayments.com/v1/payments/confirm', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Basic ${Buffer.from(secretKey + ':').toString('base64')}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ paymentKey, orderId, amount }),
+        });
+
+        const paymentData = await response.json();
+
+        if (!response.ok) {
+            throw new Error(paymentData.message || '결제 승인에 실패했습니다.');
+        }
+
+        // 결제 검증 성공 시, 우리 데이터베이스 상태를 'paid'로 변경
+        const auctionId = orderId.split('_')[1];
+        await db.query("UPDATE auctions SET status = 'paid' WHERE id = $1", [auctionId]);
+
+        console.log(`Payment successful for orderId: ${orderId}`);
+        res.status(200).json({ message: '결제가 성공적으로 완료되었습니다.', ...paymentData });
+
+    } catch (error) {
+        console.error('Payment confirmation error:', error);
+        // (실제로는 결제 실패 시 토스페이먼츠에 결제 취소 API를 호출하는 로직도 필요)
         res.status(400).json({ message: error.message });
     }
 });
