@@ -35,7 +35,7 @@ const app = express();
 
 // --- CORS 설정 (가장 중요) ---
 // Netlify에 배포된 당신의 웹사이트 주소를 여기에 정확하게 입력해야 합니다.
-const whitelist = ['http://localhost:3000', 'https://cool-semifreddo-6004a7.netlify.app/'];
+const whitelist = ['http://localhost:3000', 'https://cool-semifreddo-6004a7.netlify.app'];
 const corsOptions = {
     origin: function (origin, callback) {
         if (!origin || whitelist.indexOf(origin) !== -1) {
