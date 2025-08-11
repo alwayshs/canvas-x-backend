@@ -109,32 +109,62 @@ async function manageAuctions() {
 // =============================================
 
 // --- 1. 사용자 인증 API ---
+// POST /api/users/signup
 app.post('/api/users/signup', async (req, res) => {
     const { email, password, nickname } = req.body;
-    if (!email || !password || !nickname) return res.status(400).json({ message: '모든 필드를 입력해주세요.' });
+    if (!email || !password || !nickname) 
+        return res.status(400).json({ message: '모든 필드를 입력해주세요.' });
+
     try {
+        // 이메일 중복 체크
+        const emailCheck = await db.query('SELECT id FROM users WHERE email = $1', [email]);
+        if (emailCheck.rows.length > 0) {
+            return res.status(409).json({ message: '이미 등록된 이메일입니다.' });
+        }
+
+        // 닉네임 중복 체크
+        const nickCheck = await db.query('SELECT id FROM users WHERE nickname = $1', [nickname]);
+        if (nickCheck.rows.length > 0) {
+            return res.status(409).json({ message: '이미 사용 중인 닉네임입니다.' });
+        }
+
+        // 비밀번호 해싱
         const password_hash = await bcrypt.hash(password, 10);
+
+        // 사용자 등록
         const newUser = await db.query(
-            'INSERT INTO users (id, email, password_hash, nickname) VALUES ($1, $2, $3, $4) RETURNING id, email, nickname',
-            [nickname, email, password_hash, nickname]
+            'INSERT INTO users (email, password_hash, nickname) VALUES ($1, $2, $3) RETURNING id, email, nickname',
+            [email, password_hash, nickname]
         );
+
         res.status(201).json(newUser.rows[0]);
     } catch (error) {
-        res.status(500).json({ message: '회원가입 중 오류 발생 (이메일/닉네임 중복 가능성)' });
+        console.error('회원가입 오류:', error);
+        res.status(500).json({ message: '회원가입 중 오류가 발생했습니다.' });
     }
 });
 
+// POST /api/users/login
 app.post('/api/users/login', async (req, res) => {
     const { email, password } = req.body;
+    if (!email || !password)
+        return res.status(400).json({ message: '이메일과 비밀번호를 모두 입력해주세요.' });
+
     try {
         const result = await db.query('SELECT * FROM users WHERE email = $1', [email]);
-        if (result.rows.length === 0) return res.status(401).json({ message: '이메일 또는 비밀번호가 올바르지 않습니다.' });
+        if (result.rows.length === 0)
+            return res.status(401).json({ message: '이메일 또는 비밀번호가 올바르지 않습니다.' });
+
         const user = result.rows[0];
         const isValid = await bcrypt.compare(password, user.password_hash);
-        if (!isValid) return res.status(401).json({ message: '이메일 또는 비밀번호가 올바르지 않습니다.' });
+        if (!isValid)
+            return res.status(401).json({ message: '이메일 또는 비밀번호가 올바르지 않습니다.' });
+
+        // 세션 또는 토큰 발급(필요 시 추가)
         res.json({ message: '로그인 성공!', user: { id: user.id, email: user.email, nickname: user.nickname } });
     } catch (error) {
-        res.status(500).json({ message: '로그인 중 오류 발생' });
+        console.error('로그인 오류:', error);
+        res.status(500).json({ message: '로그인 중 오류가 발생했습니다.' });
     }
 });
 
@@ -159,22 +189,47 @@ app.get('/api/auctions/:id', async (req, res) => {
     }
 });
 
+// POST /api/auctions/:id/bid
 app.post('/api/auctions/:id/bid', async (req, res) => {
     const { userId, amount } = req.body;
     const { id } = req.params;
+
+    if (!userId || !amount)
+        return res.status(400).json({ message: '사용자 ID와 입찰 금액을 모두 입력해주세요.' });
+
     try {
         await db.query('BEGIN');
+
+        // 경매 잠금 (FOR UPDATE)
         const auctionResult = await db.query("SELECT * FROM auctions WHERE id = $1 FOR UPDATE", [id]);
+        if (auctionResult.rows.length === 0) throw new Error('존재하지 않는 경매입니다.');
+
         const auction = auctionResult.rows[0];
-        if (!auction || new Date() > new Date(auction.end_time)) throw new Error('종료된 경매입니다.');
-        if (amount <= (auction.current_highest_bid || auction.starting_bid)) throw new Error('입찰 금액이 현재 최고가보다 낮습니다.');
-        
-        await db.query('UPDATE auctions SET current_highest_bid = $1, current_winner_id = $2 WHERE id = $3', [amount, userId, id]);
-        await db.query('INSERT INTO bids (auction_id, user_id, amount) VALUES ($1, $2, $3)', [id, userId, amount]);
+        if (new Date() > new Date(auction.end_time)) throw new Error('종료된 경매입니다.');
+        const minBid = auction.current_highest_bid || auction.starting_bid;
+        if (amount <= minBid) throw new Error(`입찰 금액은 현재 최고가(${minBid}원)보다 커야 합니다.`);
+
+        // 사용자 존재 확인
+        const userCheck = await db.query('SELECT id FROM users WHERE id = $1', [userId]);
+        if (userCheck.rows.length === 0) throw new Error('유효하지 않은 사용자입니다.');
+
+        // 경매 정보 업데이트
+        await db.query(
+            'UPDATE auctions SET current_highest_bid = $1, current_winner_id = $2 WHERE id = $3',
+            [amount, userId, id]
+        );
+
+        // 입찰 내역 기록
+        await db.query(
+            'INSERT INTO bids (auction_id, user_id, amount) VALUES ($1, $2, $3)',
+            [id, userId, amount]
+        );
+
         await db.query('COMMIT');
         res.status(201).json({ message: '입찰 성공!' });
     } catch (error) {
         await db.query('ROLLBACK');
+        console.error('입찰 오류:', error);
         res.status(400).json({ message: error.message });
     }
 });
