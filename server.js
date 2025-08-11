@@ -63,6 +63,16 @@ function authenticateToken(req, res, next) {
     });
 }
 
+// 관리자 권한 확인 미들웨어 추가
+function authenticateAdmin(req, res, next) {
+  authenticateToken(req, res, () => {
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ message: '관리자 권한이 필요합니다.' });
+    }
+    next();
+  });
+}
+
 // =============================================
 // 자동 경매 관리 시스템 (Scheduler)
 // =============================================
@@ -334,6 +344,49 @@ app.post('/api/ad-content/upload', authenticateToken, upload.single('adFile'), a
 });
 
 // --- 6. 관리자 API (필요 시 별도 추가) ---
+// 승인 대기 중인 광고 리스트 조회
+app.get('/api/admin/pending-ads', authenticateAdmin, async (req, res) => {
+  try {
+    const result = await db.query("SELECT * FROM ad_content WHERE approval_status = 'pending_approval' ORDER BY created_at ASC");
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ message: '승인 대기 광고 목록 조회 실패' });
+  }
+});
+
+// 광고 승인 처리
+app.post('/api/admin/ads/:adId/approve', authenticateAdmin, async (req, res) => {
+  const adId = req.params.adId;
+  try {
+    await db.query('BEGIN');
+    // 광고 승인
+    await db.query("UPDATE ad_content SET approval_status = 'approved' WHERE id = $1", [adId]);
+    // 관련 경매 상태 변경
+    await db.query("UPDATE auctions SET status = 'approved' WHERE id = (SELECT auction_id FROM ad_content WHERE id = $1)", [adId]);
+    await db.query('COMMIT');
+    res.json({ message: '광고가 승인되었습니다.' });
+  } catch (error) {
+    await db.query('ROLLBACK');
+    res.status(500).json({ message: '광고 승인 처리 실패' });
+  }
+});
+
+// 광고 거절 처리
+app.post('/api/admin/ads/:adId/reject', authenticateAdmin, async (req, res) => {
+  const adId = req.params.adId;
+  try {
+    await db.query('BEGIN');
+    // 광고 거절
+    await db.query("UPDATE ad_content SET approval_status = 'rejected' WHERE id = $1", [adId]);
+    // 관련 경매 상태 변경 (필요에 따라 조정 가능)
+    await db.query("UPDATE auctions SET status = 'active' WHERE id = (SELECT auction_id FROM ad_content WHERE id = $1)", [adId]);
+    await db.query('COMMIT');
+    res.json({ message: '광고가 거절되었습니다.' });
+  } catch (error) {
+    await db.query('ROLLBACK');
+    res.status(500).json({ message: '광고 거절 처리 실패' });
+  }
+});
 
 // 서버 시작
 const PORT = process.env.PORT || 3001;
