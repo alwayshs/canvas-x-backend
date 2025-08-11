@@ -8,6 +8,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const db = require('./db');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 
@@ -131,10 +132,13 @@ app.post('/api/users/signup', async (req, res) => {
         // 비밀번호 해싱
         const password_hash = await bcrypt.hash(password, 10);
 
-        // 사용자 등록
+        // UUID 생성
+        const newUserId = uuidv4();
+
+        // 사용자 등록 (id 포함)
         const newUser = await db.query(
-            'INSERT INTO users (email, password_hash, nickname) VALUES ($1, $2, $3) RETURNING id, email, nickname',
-            [email, password_hash, nickname]
+            'INSERT INTO users (id, email, password_hash, nickname) VALUES ($1, $2, $3, $4) RETURNING id, email, nickname',
+            [newUserId, email, password_hash, nickname]
         );
 
         res.status(201).json(newUser.rows[0]);
