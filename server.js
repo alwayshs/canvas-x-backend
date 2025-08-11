@@ -177,32 +177,32 @@ app.post('/api/users/signup', async (req, res) => {
 
 // 로그인
 app.post('/api/users/login', async (req, res) => {
-    const { email, password } = req.body;
-    if (!email || !password)
-        return res.status(400).json({ message: '이메일과 비밀번호를 모두 입력해주세요.' });
+  const { email, password } = req.body;
+  if (!email || !password)
+      return res.status(400).json({ message: '이메일과 비밀번호를 모두 입력해주세요.' });
 
-    try {
-        const result = await db.query('SELECT * FROM users WHERE email = $1', [email]);
-        if (result.rows.length === 0)
-            return res.status(401).json({ message: '이메일 또는 비밀번호가 올바르지 않습니다.' });
+  try {
+      const result = await db.query('SELECT * FROM users WHERE email = $1', [email]);
+      if (result.rows.length === 0)
+          return res.status(401).json({ message: '이메일 또는 비밀번호가 올바르지 않습니다.' });
 
-        const user = result.rows[0];
-        const isValid = await bcrypt.compare(password, user.password_hash);
-        if (!isValid)
-            return res.status(401).json({ message: '이메일 또는 비밀번호가 올바르지 않습니다.' });
+      const user = result.rows[0];
+      const isValid = await bcrypt.compare(password, user.password_hash);
+      if (!isValid)
+          return res.status(401).json({ message: '이메일 또는 비밀번호가 올바르지 않습니다.' });
 
-        // JWT 토큰 발급
-        const token = jwt.sign(
-          { id: user.id, email: user.email, nickname: user.nickname },
-          JWT_SECRET,
-          { expiresIn: '1h' }
-        );
+      // JWT 토큰 발급 시 isAdmin 포함
+      const token = jwt.sign(
+        { id: user.id, email: user.email, nickname: user.nickname, isAdmin: user.is_admin },
+        JWT_SECRET,
+        { expiresIn: '1h' }
+      );
 
-        res.json({ message: '로그인 성공!', token, user: { id: user.id, email: user.email, nickname: user.nickname } });
-    } catch (error) {
-        console.error('로그인 오류:', error);
-        res.status(500).json({ message: '로그인 중 오류가 발생했습니다.' });
-    }
+      res.json({ message: '로그인 성공!', token, user: { id: user.id, email: user.email, nickname: user.nickname, isAdmin: user.is_admin } });
+  } catch (error) {
+      console.error('로그인 오류:', error);
+      res.status(500).json({ message: '로그인 중 오류가 발생했습니다.' });
+  }
 });
 
 // --- 2. 경매 API ---
