@@ -14,7 +14,7 @@ const app = express();
 // --- CORS 설정 ---
 const whitelist = [
     'http://localhost:3000',
-    'https://cool-semifreddo-6004a7.netlify.app'
+    'https://canvasx.netlify.app'
 ];
 
 const corsOptions = {
