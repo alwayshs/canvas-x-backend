@@ -46,7 +46,7 @@ const upload = multer({ storage: storage });
 
 // JWT 시크릿 키
 const JWT_SECRET = process.env.JWT_SECRET || 'your-very-secret-key-for-canvas-x';
-const TOSS_SECRET_KEY = process.env.TOSS_SECRET_KEY || 'test_sk_zXLkKEypNArWmo50gM2oVb2l6Eaj';
+const TOSS_SECRET_KEY = 'test_sk_ma60RZblrqRmG7MmYpZ68wzYWBn1';
 
 // --- JWT 인증 미들웨어 ---
 function authenticateToken(req, res, next) {
