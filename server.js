@@ -314,39 +314,27 @@ app.post('/api/payments/confirm', authenticateToken, async (req, res) => {
     }
 });
 
-// --- 5. 광고 업로드 API ---
-// 낙찰 작품 광고 업로드 (JWT 인증 필요)
+// --- 5. 광고 업로드 API (수정) ---
 app.post('/api/ad-content/upload', authenticateToken, upload.single('adFile'), async (req, res) => {
-    const userId = req.user.id;
     const { auctionId } = req.body;
+    const { id: userId } = req.user;
     const file = req.file;
     if (!file) return res.status(400).json({ message: '파일이 없습니다.' });
-
     try {
         const contentUrl = `/uploads/${file.filename}`;
-
         await db.query('BEGIN');
-
-        // 권한 확인: 낙찰자이고, 결제 완료 상태여야 함
         const auctionResult = await db.query(
             "SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 AND status = 'paid' FOR UPDATE",
             [auctionId, userId]
         );
         if (auctionResult.rows.length === 0) throw new Error('업로드 권한이 없습니다.');
-
-        // 광고 콘텐츠 저장 및 승인 상태 초기화
+        
         await db.query(
-            `INSERT INTO ad_content (auction_id, owner_id, content_type, content_url, approval_status) 
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (auction_id) DO UPDATE SET content_url = $4, approval_status = $5`,
+            'INSERT INTO ad_content (auction_id, owner_id, content_type, content_url, approval_status) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (auction_id) DO UPDATE SET content_url = $4, approval_status = $5, upload_time = CURRENT_TIMESTAMP',
             [auctionId, userId, file.mimetype, contentUrl, 'pending_approval']
         );
-
-        // 경매 상태 'pending_approval'로 변경
         await db.query("UPDATE auctions SET status = 'pending_approval' WHERE id = $1", [auctionId]);
-
         await db.query('COMMIT');
-
         res.status(201).json({ message: '광고가 성공적으로 업로드되었으며, 관리자 승인을 기다리고 있습니다.' });
     } catch (error) {
         await db.query('ROLLBACK');
@@ -354,7 +342,44 @@ app.post('/api/ad-content/upload', authenticateToken, upload.single('adFile'), a
     }
 });
 
-// --- 6. 관리자 API (관리자 인증 추가) ---
+// --- 6. 광고 업로드 취소 API (신규) ---
+app.delete('/api/ad-content/:auctionId', authenticateToken, async (req, res) => {
+    const { auctionId } = req.params;
+    const { id: userId } = req.user;
+    try {
+        await db.query('BEGIN');
+        // 1. 광고 콘텐츠 정보 가져오기 (파일 경로 확인)
+        const adContentResult = await db.query(
+            "SELECT * FROM ad_content WHERE auction_id = $1 AND owner_id = $2 AND approval_status = 'pending_approval'",
+            [auctionId, userId]
+        );
+        if (adContentResult.rows.length === 0) {
+            throw new Error('취소할 수 있는 업로드 내역이 없거나 권한이 없습니다.');
+        }
+        const adContent = adContentResult.rows[0];
+
+        // 2. ad_content 테이블에서 해당 항목 삭제
+        await db.query("DELETE FROM ad_content WHERE id = $1", [adContent.id]);
+
+        // 3. auctions 테이블 상태를 'paid'로 되돌리기
+        await db.query("UPDATE auctions SET status = 'paid' WHERE id = $1", [auctionId]);
+
+        // 4. 서버에 저장된 실제 파일 삭제
+        const filePath = path.join(__dirname, adContent.content_url);
+        fs.unlink(filePath, (err) => {
+            if (err) console.error("Error deleting file:", filePath, err);
+            else console.log("Successfully deleted file:", filePath);
+        });
+
+        await db.query('COMMIT');
+        res.status(200).json({ message: '업로드가 성공적으로 취소되었습니다.' });
+    } catch (error) {
+        await db.query('ROLLBACK');
+        res.status(400).json({ message: error.message });
+    }
+});
+
+// --- 7. 관리자 API (관리자 인증 추가) ---
 app.get('/api/admin/pending-ads', authenticateToken, isAdmin, async (req, res) => {
     try {
         const result = await db.query("SELECT * FROM ad_content WHERE approval_status = 'pending_approval' ORDER BY upload_time ASC");
