@@ -1,4 +1,6 @@
-// db.js - 최종 Render 배포용 버전
+// ===================================================================
+// db.js - 리팩터링된 서버와 호환되는 최종 버전
+// ===================================================================
 const { Pool } = require('pg');
 
 const pool = new Pool({
@@ -11,5 +13,9 @@ const pool = new Pool({
 });
 
 module.exports = {
+    // 기존의 간단한 쿼리 기능
     query: (text, params) => pool.query(text, params),
+    
+    // 서버가 트랜잭션 관리를 위해 데이터베이스와 직접 연결할 수 있도록 connect 함수를 추가로 내보냅니다.
+    connect: () => pool.connect(),
 };
