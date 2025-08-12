@@ -249,15 +249,11 @@ app.post('/api/auctions/:id/bid', authenticateToken, async (req, res) => {
 // --- 3. 대시보드 API ---
 // 내 낙찰 내역 조회 (JWT 인증 필요, 본인만 조회 가능)
 app.get('/api/users/:userId/won-auctions', authenticateToken, async (req, res) => {
-    const userId = req.user.id;
-    if (userId !== req.params.userId) {
-        return res.status(403).json({ message: '권한이 없습니다.' });
-    }
+    // 본인 또는 관리자만 조회 가능
+    if (req.user.id !== req.params.userId && !req.user.is_admin) return res.sendStatus(403);
     try {
-        const result = await db.query(
-            "SELECT * FROM auctions WHERE final_winner_id = $1 ORDER BY id DESC",
-            [userId]
-        );
+        // final_winner_id가 본인인 경매 목록을 조회
+        const result = await db.query("SELECT * FROM auctions WHERE final_winner_id = $1 ORDER BY id DESC", [req.params.userId]);
         res.json(result.rows);
     } catch (error) {
         res.status(500).json({ message: '낙찰 내역 조회 실패' });
@@ -310,6 +306,94 @@ app.post('/api/payments/confirm', authenticateToken, async (req, res) => {
 
         res.status(200).json({ message: '결제가 성공적으로 완료되었습니다.', ...paymentData });
     } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+});
+
+// --- 4.5. 낙찰 포기 및 환불 API (신규 및 수정) ---
+
+// 공통 로직: 차순위 입찰자에게 낙찰 기회를 넘기는 함수
+async function offerToSecondBidder(auctionId) {
+    // 1. 해당 경매의 2번째로 높은 입찰 기록을 찾음
+    const secondBidderResult = await db.query(
+        "SELECT user_id, amount FROM bids WHERE auction_id = $1 ORDER BY amount DESC, created_at ASC LIMIT 1 OFFSET 1",
+        [auctionId]
+    );
+
+    if (secondBidderResult.rows.length > 0) {
+        // 2. 차순위 입찰자가 있으면, 그 사람을 새로운 낙찰자로 지정
+        const secondBidder = secondBidderResult.rows[0];
+        await db.query(
+            "UPDATE auctions SET status = 'ended', final_winner_id = $1, final_bid = $2 WHERE id = $3",
+            [secondBidder.user_id, secondBidder.amount, auctionId]
+        );
+        console.log(`[Second Chance] Offered auction ${auctionId} to ${secondBidder.user_id} for ${secondBidder.amount}`);
+    } else {
+        // 3. 차순위 입찰자가 없으면, 경매를 유찰 상태로 변경 (또는 재경매 로직 추가 가능)
+        await db.query(
+            "UPDATE auctions SET status = 'failed', final_winner_id = NULL, final_bid = NULL WHERE id = $1",
+            [auctionId]
+        );
+        console.log(`[Second Chance] No second bidder for auction ${auctionId}. Marked as failed.`);
+    }
+}
+
+// 낙찰 포기 API (결제 전)
+app.post('/api/auctions/:auctionId/cancel', authenticateToken, async (req, res) => {
+    const { auctionId } = req.params;
+    const { id: userId } = req.user;
+
+    try {
+        await db.query('BEGIN');
+        const auctionResult = await db.query("SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 AND status = 'ended' FOR UPDATE", [auctionId, userId]);
+        if (auctionResult.rows.length === 0) throw new Error('낙찰을 포기할 수 없는 상태입니다.');
+
+        await offerToSecondBidder(auctionId);
+        
+        await db.query('COMMIT');
+        res.status(200).json({ message: '낙찰을 포기했습니다. 차순위 입찰자에게 기회가 넘어갑니다.' });
+    } catch (error) {
+        await db.query('ROLLBACK');
+        res.status(400).json({ message: error.message });
+    }
+});
+
+// 환불 요청 API (결제 후)
+app.post('/api/auctions/:auctionId/refund', authenticateToken, async (req, res) => {
+    const { auctionId } = req.params;
+    const { id: userId } = req.user;
+
+    try {
+        await db.query('BEGIN');
+        const auctionResult = await db.query("SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 FOR UPDATE", [auctionId, userId]);
+        if (auctionResult.rows.length === 0) throw new Error('환불을 요청할 수 없는 경매입니다.');
+        
+        const auction = auctionResult.rows[0];
+        const auctionDate = new Date(auction.id);
+        const refundDeadline = new Date(auctionDate.getFullYear(), auctionDate.getMonth(), auctionDate.getDate(), 17, 0, 0); // 당일 17:00
+
+        if (new Date() > refundDeadline) {
+            throw new Error('환불 가능한 시간이 지났습니다 (당일 17시까지).');
+        }
+        
+        // (실제 운영 시, 여기에 토스페이먼츠 환불 API 호출 로직 추가)
+        console.log(`[Refund] Processing refund for auction ${auctionId}...`);
+
+        await offerToSecondBidder(auctionId);
+
+        // 업로드된 광고가 있다면 삭제
+        const adContentResult = await db.query("DELETE FROM ad_content WHERE auction_id = $1 RETURNING content_url", [auctionId]);
+        if (adContentResult.rows.length > 0) {
+            const filePath = path.join(__dirname, adContentResult.rows[0].content_url);
+            fs.unlink(filePath, (err) => {
+                if (err) console.error("Error deleting refunded ad file:", err);
+            });
+        }
+
+        await db.query('COMMIT');
+        res.status(200).json({ message: '환불이 요청되었습니다. 차순위 입찰자에게 기회가 넘어갑니다.' });
+    } catch (error) {
+        await db.query('ROLLBACK');
         res.status(400).json({ message: error.message });
     }
 });
