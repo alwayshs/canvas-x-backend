@@ -51,15 +51,17 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 // --- JWT 인증 미들웨어 ---
+// 중요한 API 요청이 들어왔을 때, 유효한 '출입증(토큰)'이 있는지 검사하는 함수
 function authenticateToken(req, res, next) {
-    const authHeader = req.headers['authorization']; // Bearer 토큰
-    const token = authHeader && authHeader.split(' ')[1];
-    if (!token) return res.status(401).json({ message: '토큰이 없습니다.' });
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // "Bearer TOKEN" 형식
+
+    if (token == null) return res.sendStatus(401); // 토큰이 없음
 
     jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) return res.status(403).json({ message: '유효하지 않은 토큰입니다.' });
-        req.user = user; // 토큰 payload(userId 등)
-        next();
+        if (err) return res.sendStatus(403); // 토큰이 유효하지 않음
+        req.user = user; // 요청 객체에 사용자 정보를 저장
+        next(); // 다음 단계로 진행
     });
 }
 
@@ -175,29 +177,28 @@ app.post('/api/users/signup', async (req, res) => {
     }
 });
 
-// 로그인
 app.post('/api/users/login', async (req, res) => {
     const { email, password } = req.body;
     try {
         const result = await db.query('SELECT * FROM users WHERE email = $1', [email]);
-        if (result.rows.length === 0) {
-            return res.status(401).json({ message: '이메일 또는 비밀번호가 올바르지 않습니다.' });
-        }
+        if (result.rows.length === 0) return res.status(401).json({ message: '이메일 또는 비밀번호가 올바르지 않습니다.' });
+        
         const user = result.rows[0];
         const isValid = await bcrypt.compare(password, user.password_hash);
-        if (!isValid) {
-            return res.status(401).json({ message: '이메일 또는 비밀번호가 올바르지 않습니다.' });
-        }
-        
-        // is_admin 정보를 포함하여 사용자 정보를 반환합니다.
+        if (!isValid) return res.status(401).json({ message: '이메일 또는 비밀번호가 올바르지 않습니다.' });
+
+        // 로그인 성공 시, JWT 토큰 생성
+        const userPayload = { 
+            id: user.id, 
+            nickname: user.nickname,
+            is_admin: user.is_admin 
+        };
+        const accessToken = jwt.sign(userPayload, JWT_SECRET, { expiresIn: '1d' }); // 1일 동안 유효
+
         res.json({ 
             message: '로그인 성공!', 
-            user: { 
-                id: user.id, 
-                email: user.email, 
-                nickname: user.nickname,
-                is_admin: user.is_admin // is_admin 상태를 함께 전달
-            } 
+            accessToken: accessToken,
+            user: userPayload
         });
     } catch (error) {
         res.status(500).json({ message: '로그인 중 오류 발생' });
@@ -235,49 +236,25 @@ app.get('/api/auctions/:id', async (req, res) => {
     }
 });
 
-// 입찰 (JWT 인증 필요)
+// 입찰 API에 authenticateToken 미들웨어를 추가하여 보안 강화
 app.post('/api/auctions/:id/bid', authenticateToken, async (req, res) => {
-    const userId = req.user.id;
     const { amount } = req.body;
-    const { id } = req.params;
-
-    if (!amount)
-        return res.status(400).json({ message: '입찰 금액을 입력해주세요.' });
+    const { id: auctionId } = req.params;
+    const { id: userId } = req.user; // 토큰에서 인증된 사용자 ID를 가져옴
 
     try {
         await db.query('BEGIN');
-
-        // 경매 잠금 (FOR UPDATE)
-        const auctionResult = await db.query("SELECT * FROM auctions WHERE id = $1 FOR UPDATE", [id]);
-        if (auctionResult.rows.length === 0) throw new Error('존재하지 않는 경매입니다.');
-
+        const auctionResult = await db.query("SELECT * FROM auctions WHERE id = $1 FOR UPDATE", [auctionId]);
         const auction = auctionResult.rows[0];
-        if (new Date() > new Date(auction.end_time)) throw new Error('종료된 경매입니다.');
-
-        const minBid = auction.current_highest_bid || auction.starting_bid;
-        if (amount <= minBid) throw new Error(`입찰 금액은 현재 최고가(${minBid}원)보다 커야 합니다.`);
-
-        // 사용자 존재 확인
-        const userCheck = await db.query('SELECT id FROM users WHERE id = $1', [userId]);
-        if (userCheck.rows.length === 0) throw new Error('유효하지 않은 사용자입니다.');
-
-        // 경매 정보 업데이트
-        await db.query(
-            'UPDATE auctions SET current_highest_bid = $1, current_winner_id = $2 WHERE id = $3',
-            [amount, userId, id]
-        );
-
-        // 입찰 내역 기록
-        await db.query(
-            'INSERT INTO bids (auction_id, user_id, amount) VALUES ($1, $2, $3)',
-            [id, userId, amount]
-        );
-
+        if (!auction || new Date() > new Date(auction.end_time)) throw new Error('종료된 경매입니다.');
+        if (amount <= (auction.current_highest_bid || auction.starting_bid)) throw new Error('입찰 금액이 현재 최고가보다 낮습니다.');
+        
+        await db.query('UPDATE auctions SET current_highest_bid = $1, current_winner_id = $2 WHERE id = $3', [amount, userId, auctionId]);
+        await db.query('INSERT INTO bids (auction_id, user_id, amount) VALUES ($1, $2, $3)', [auctionId, userId, amount]);
         await db.query('COMMIT');
         res.status(201).json({ message: '입찰 성공!' });
     } catch (error) {
         await db.query('ROLLBACK');
-        console.error('입찰 오류:', error);
         res.status(400).json({ message: error.message });
     }
 });
