@@ -15,6 +15,7 @@ const app = express();
 // --- CORS 설정 ---
 const whitelist = [
     'http://localhost:3000',
+    'https://cool-semifreddo-6004a7.netlify.app',
     'https://canvasx.netlify.app'
 ];
 const corsOptions = {
@@ -225,7 +226,7 @@ app.get('/api/auctions/:id', async (req, res) => {
 app.post('/api/auctions/:id/bid', authenticateToken, async (req, res) => {
     const { amount } = req.body;
     const { id: auctionId } = req.params;
-    const { id: userId } = req.user; // 토큰에서 인증된 사용자 ID를 가져옴
+    const { id: userId } = req.user; 
 
     try {
         await db.query('BEGIN');
