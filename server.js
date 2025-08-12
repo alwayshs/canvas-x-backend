@@ -327,7 +327,6 @@ app.post('/api/ad-content/upload', authenticateToken, upload.single('adFile'), a
             "SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 AND status = 'paid' FOR UPDATE",
             [auctionId, userId]
         );
-        if (auctionResult.rows.length === 0) throw new Error('업로드 권한이 없습니다.');
         
         await db.query(
             'INSERT INTO ad_content (auction_id, owner_id, content_type, content_url, approval_status) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (auction_id) DO UPDATE SET content_url = $4, approval_status = $5, upload_time = CURRENT_TIMESTAMP',
