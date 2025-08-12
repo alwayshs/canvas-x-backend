@@ -467,7 +467,7 @@ app.get('/api/admin/pending-ads', authenticateToken, isAdmin, async (req, res) =
 // 광고 승인/거절
 app.patch('/api/admin/ad-content/:id/status', authenticateToken, isAdmin, async (req, res) => {
     const { id } = req.params;
-    const { newStatus } = req.body;
+    const { newStatus } = res.body;
     if (!['approved', 'rejected'].includes(newStatus)) {
         return res.status(400).json({ message: '유효하지 않은 상태 값입니다.' });
     }
