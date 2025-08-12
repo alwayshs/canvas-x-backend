@@ -246,14 +246,17 @@ app.post('/api/auctions/:id/bid', authenticateToken, async (req, res) => {
     }
 });
 
-// --- 3. 대시보드 API ---
-// 내 낙찰 내역 조회 (JWT 인증 필요, 본인만 조회 가능)
+// --- 3. 대시보드 API (수정) ---
 app.get('/api/users/:userId/won-auctions', authenticateToken, async (req, res) => {
     // 본인 또는 관리자만 조회 가능
     if (req.user.id !== req.params.userId && !req.user.is_admin) return res.sendStatus(403);
     try {
-        // final_winner_id가 본인인 경매 목록을 조회
-        const result = await db.query("SELECT * FROM auctions WHERE final_winner_id = $1 ORDER BY id DESC", [req.params.userId]);
+        // FIX: final_winner_id가 본인이고, 상태가 'active'가 아닌 모든 경매를 조회합니다.
+        // 이렇게 하면 취소/환불로 final_winner_id가 변경된 경매는 더 이상 보이지 않습니다.
+        const result = await db.query(
+            "SELECT * FROM auctions WHERE final_winner_id = $1 AND status != 'active' ORDER BY id DESC", 
+            [req.params.userId]
+        );
         res.json(result.rows);
     } catch (error) {
         res.status(500).json({ message: '낙찰 내역 조회 실패' });
