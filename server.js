@@ -301,8 +301,12 @@ app.post('/api/payments/confirm', authenticateToken, async (req, res) => {
         const paymentData = await response.json();
         if (!response.ok) throw new Error(paymentData.message || '결제 승인에 실패했습니다.');
 
+        // 결제 검증 성공 시, 우리 데이터베이스 상태를 'paid'로 변경하고 paymentKey를 저장
         const auctionId = orderId.split('_')[1];
-        await db.query("UPDATE auctions SET status = 'paid' WHERE id = $1", [auctionId]);
+        await db.query(
+            "UPDATE auctions SET status = 'paid', payment_key = $1 WHERE id = $2",
+            [paymentKey, auctionId]
+        );
 
         res.status(200).json({ message: '결제가 성공적으로 완료되었습니다.', ...paymentData });
     } catch (error) {
@@ -370,14 +374,34 @@ app.post('/api/auctions/:auctionId/refund', authenticateToken, async (req, res) 
         
         const auction = auctionResult.rows[0];
         const auctionDate = new Date(auction.id);
-        const refundDeadline = new Date(auctionDate.getFullYear(), auctionDate.getMonth(), auctionDate.getDate(), 17, 0, 0); // 당일 17:00
+        const refundDeadline = new Date(auctionDate.getFullYear(), auctionDate.getMonth(), auctionDate.getDate(), 17, 0, 0);
 
         if (new Date() > refundDeadline) {
             throw new Error('환불 가능한 시간이 지났습니다 (당일 17시까지).');
         }
         
-        // (실제 운영 시, 여기에 토스페이먼츠 환불 API 호출 로직 추가)
-        console.log(`[Refund] Processing refund for auction ${auctionId}...`);
+        // 데이터베이스에 저장된 paymentKey를 가져옵니다.
+        const paymentKey = auction.payment_key;
+        if (!paymentKey) {
+            throw new Error('결제 정보를 찾을 수 없어 환불할 수 없습니다.');
+        }
+        
+        // 실제 토스페이먼츠 환불 API 호출
+        const refundResponse = await fetch(`https://api.tosspayments.com/v1/payments/${paymentKey}/cancel`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Basic ${Buffer.from(TOSS_SECRET_KEY + ':').toString('base64')}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ cancelReason: '고객 변심' }),
+        });
+
+        if (!refundResponse.ok) {
+            const refundError = await refundResponse.json();
+            throw new Error(refundError.message || '토스페이먼츠 환불 처리 중 오류가 발생했습니다.');
+        }
+        
+        console.log(`[Refund] Successfully processed refund for auction ${auctionId}`);
 
         await offerToSecondBidder(auctionId);
 
