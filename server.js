@@ -46,6 +46,7 @@ const upload = multer({ storage: storage });
 
 // JWT 시크릿 키
 const JWT_SECRET = process.env.JWT_SECRET || 'your-very-secret-key-for-canvas-x';
+const TOSS_SECRET_KEY = process.env.TOSS_SECRET_KEY || 'test_sk_zXLkKEypNArWmo50gM2oVb2l6Eaj';
 
 // --- JWT 인증 미들웨어 ---
 function authenticateToken(req, res, next) {
@@ -264,6 +265,54 @@ app.get('/api/users/:userId/won-auctions', authenticateToken, async (req, res) =
 });
 
 // --- 4. 결제 API (실제 연동은 별도 구현) ---
+app.post('/api/payments/request', authenticateToken, async (req, res) => {
+    const { auctionId } = req.body;
+    const { id: userId } = req.user;
+    try {
+        const auctionResult = await db.query(
+            "SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 AND status = 'ended'",
+            [auctionId, userId]
+        );
+        const auction = auctionResult.rows[0];
+
+        if (!auction) {
+            return res.status(403).json({ message: '결제 대상 경매가 아니거나 권한이 없습니다.' });
+        }
+
+        res.json({
+            amount: auction.final_bid,
+            orderId: `canvasx_${auctionId}_${new Date().getTime()}`,
+            orderName: `Canvas X - ${auctionId} 광고권`
+        });
+    } catch (error) {
+        res.status(500).json({ message: '결제 정보를 생성하는 중 오류가 발생했습니다.' });
+    }
+});
+
+app.post('/api/payments/confirm', authenticateToken, async (req, res) => {
+    const { paymentKey, orderId, amount } = req.body;
+    
+    try {
+        const response = await fetch('https://api.tosspayments.com/v1/payments/confirm', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Basic ${Buffer.from(TOSS_SECRET_KEY + ':').toString('base64')}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ paymentKey, orderId, amount }),
+        });
+
+        const paymentData = await response.json();
+        if (!response.ok) throw new Error(paymentData.message || '결제 승인에 실패했습니다.');
+
+        const auctionId = orderId.split('_')[1];
+        await db.query("UPDATE auctions SET status = 'paid' WHERE id = $1", [auctionId]);
+
+        res.status(200).json({ message: '결제가 성공적으로 완료되었습니다.', ...paymentData });
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+});
 
 // --- 5. 광고 업로드 API ---
 // 낙찰 작품 광고 업로드 (JWT 인증 필요)
