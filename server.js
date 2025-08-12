@@ -347,27 +347,19 @@ app.delete('/api/ad-content/:auctionId', authenticateToken, async (req, res) => 
     const { id: userId } = req.user;
     try {
         await db.query('BEGIN');
-        // 1. 광고 콘텐츠 정보 가져오기 (파일 경로 확인)
         const adContentResult = await db.query(
             "SELECT * FROM ad_content WHERE auction_id = $1 AND owner_id = $2 AND approval_status = 'pending_approval'",
             [auctionId, userId]
         );
-        if (adContentResult.rows.length === 0) {
-            throw new Error('취소할 수 있는 업로드 내역이 없거나 권한이 없습니다.');
-        }
+        if (adContentResult.rows.length === 0) throw new Error('취소할 수 있는 업로드 내역이 없거나 권한이 없습니다.');
+        
         const adContent = adContentResult.rows[0];
-
-        // 2. ad_content 테이블에서 해당 항목 삭제
         await db.query("DELETE FROM ad_content WHERE id = $1", [adContent.id]);
-
-        // 3. auctions 테이블 상태를 'paid'로 되돌리기
         await db.query("UPDATE auctions SET status = 'paid' WHERE id = $1", [auctionId]);
 
-        // 4. 서버에 저장된 실제 파일 삭제
         const filePath = path.join(__dirname, adContent.content_url);
         fs.unlink(filePath, (err) => {
-            if (err) console.error("Error deleting file:", filePath, err);
-            else console.log("Successfully deleted file:", filePath);
+            if (err) console.error("Error deleting file:", err);
         });
 
         await db.query('COMMIT');
@@ -388,38 +380,29 @@ app.get('/api/admin/pending-ads', authenticateToken, isAdmin, async (req, res) =
     }
 });
 
-// 광고 승인 처리
-app.post('/api/admin/ads/:adId/approve', authenticateToken, isAdmin, async (req, res) => {
-  const adId = req.params.adId;
-  try {
-    await db.query('BEGIN');
-    // 광고 승인
-    await db.query("UPDATE ad_content SET approval_status = 'approved' WHERE id = $1", [adId]);
-    // 관련 경매 상태 변경
-    await db.query("UPDATE auctions SET status = 'approved' WHERE id = (SELECT auction_id FROM ad_content WHERE id = $1)", [adId]);
-    await db.query('COMMIT');
-    res.json({ message: '광고가 승인되었습니다.' });
-  } catch (error) {
-    await db.query('ROLLBACK');
-    res.status(500).json({ message: '광고 승인 처리 실패' });
-  }
-});
-
-// 광고 거절 처리
-app.post('/api/admin/ads/:adId/reject', authenticateToken, isAdmin, async (req, res) => {
-  const adId = req.params.adId;
-  try {
-    await db.query('BEGIN');
-    // 광고 거절
-    await db.query("UPDATE ad_content SET approval_status = 'rejected' WHERE id = $1", [adId]);
-    // 관련 경매 상태 변경 (필요에 따라 조정 가능)
-    await db.query("UPDATE auctions SET status = 'active' WHERE id = (SELECT auction_id FROM ad_content WHERE id = $1)", [adId]);
-    await db.query('COMMIT');
-    res.json({ message: '광고가 거절되었습니다.' });
-  } catch (error) {
-    await db.query('ROLLBACK');
-    res.status(500).json({ message: '광고 거절 처리 실패' });
-  }
+// 광고 승인/거절
+app.patch('/api/admin/ad-content/:id/status', authenticateToken, isAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { newStatus } = req.body;
+    if (!['approved', 'rejected'].includes(newStatus)) {
+        return res.status(400).json({ message: '유효하지 않은 상태 값입니다.' });
+    }
+    try {
+        await db.query('BEGIN');
+        const adResult = await db.query("UPDATE ad_content SET approval_status = $1 WHERE id = $2 RETURNING auction_id", [newStatus, id]);
+        if (adResult.rows.length === 0) throw new Error('해당 콘텐츠를 찾을 수 없습니다.');
+        
+        const { auction_id } = adResult.rows[0];
+        // 광고가 거절되면, 해당 경매의 상태를 'rejected'로 변경하여 사용자가 재업로드할 수 있도록 합니다.
+        const newAuctionStatus = (newStatus === 'approved') ? 'completed' : 'rejected';
+        await db.query("UPDATE auctions SET status = $1 WHERE id = $2", [newAuctionStatus, auction_id]);
+        
+        await db.query('COMMIT');
+        res.status(200).json({ message: `콘텐츠 상태가 '${newStatus}'(으)로 성공적으로 변경되었습니다.` });
+    } catch (error) {
+        await db.query('ROLLBACK');
+        res.status(500).json({ message: error.message || '상태 변경 중 오류 발생' });
+    }
 });
 
 // 서버 시작
