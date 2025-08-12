@@ -1,27 +1,22 @@
 // ===================================================================
-// server.js (JWT 인증 포함 최종 클린 버전)
+// server.js (메인 서버 프로그램) - 관리자 인증 강화 버전
 // ===================================================================
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const db = require('./db'); // pg Pool 커넥션 모듈 (별도 작성 필요)
-const { v4: uuidv4 } = require('uuid');
-const jwt = require('jsonwebtoken');
-require('dotenv').config();
+const db = require('./db');
 
 const app = express();
-
-const JWT_SECRET = process.env.JWT_SECRET || 'your_secret_key_here';
 
 // --- CORS 설정 ---
 const whitelist = [
     'http://localhost:3000',
     'https://canvasx.netlify.app'
 ];
-
 const corsOptions = {
     origin: function (origin, callback) {
         if (!origin || whitelist.includes(origin)) {
@@ -32,7 +27,6 @@ const corsOptions = {
     },
     credentials: true
 };
-
 app.use(cors(corsOptions));
 app.use(express.json());
 
@@ -40,7 +34,6 @@ app.use(express.json());
 const uploadDir = 'uploads';
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, uploadDir + '/'),
     filename: (req, file, cb) => {
@@ -50,29 +43,29 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
+// JWT 시크릿 키
+const JWT_SECRET = process.env.JWT_SECRET || 'your-very-secret-key-for-canvas-x';
+
 // --- JWT 인증 미들웨어 ---
-// 중요한 API 요청이 들어왔을 때, 유효한 '출입증(토큰)'이 있는지 검사하는 함수
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // "Bearer TOKEN" 형식
-
-    if (token == null) return res.sendStatus(401); // 토큰이 없음
+    const token = authHeader && authHeader.split(' ')[1];
+    if (token == null) return res.sendStatus(401);
 
     jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) return res.sendStatus(403); // 토큰이 유효하지 않음
-        req.user = user; // 요청 객체에 사용자 정보를 저장
-        next(); // 다음 단계로 진행
+        if (err) return res.sendStatus(403);
+        req.user = user;
+        next();
     });
 }
 
-// 관리자 권한 확인 미들웨어 추가
-function authenticateAdmin(req, res, next) {
-  authenticateToken(req, res, () => {
-    if (!req.user.isAdmin) {
-      return res.status(403).json({ message: '관리자 권한이 필요합니다.' });
+// --- 관리자 확인 미들웨어 ---
+function isAdmin(req, res, next) {
+    if (req.user && req.user.is_admin) {
+        next();
+    } else {
+        res.status(403).json({ message: '관리자 권한이 필요합니다.' });
     }
-    next();
-  });
 }
 
 // =============================================
@@ -177,6 +170,7 @@ app.post('/api/users/signup', async (req, res) => {
     }
 });
 
+// login
 app.post('/api/users/login', async (req, res) => {
     const { email, password } = req.body;
     try {
@@ -187,19 +181,10 @@ app.post('/api/users/login', async (req, res) => {
         const isValid = await bcrypt.compare(password, user.password_hash);
         if (!isValid) return res.status(401).json({ message: '이메일 또는 비밀번호가 올바르지 않습니다.' });
 
-        // 로그인 성공 시, JWT 토큰 생성
-        const userPayload = { 
-            id: user.id, 
-            nickname: user.nickname,
-            is_admin: user.is_admin 
-        };
-        const accessToken = jwt.sign(userPayload, JWT_SECRET, { expiresIn: '1d' }); // 1일 동안 유효
+        const userPayload = { id: user.id, nickname: user.nickname, is_admin: user.is_admin };
+        const accessToken = jwt.sign(userPayload, JWT_SECRET, { expiresIn: '1d' });
 
-        res.json({ 
-            message: '로그인 성공!', 
-            accessToken: accessToken,
-            user: userPayload
-        });
+        res.json({ message: '로그인 성공!', accessToken, user: userPayload });
     } catch (error) {
         res.status(500).json({ message: '로그인 중 오류 발생' });
     }
@@ -319,15 +304,14 @@ app.post('/api/ad-content/upload', authenticateToken, upload.single('adFile'), a
     }
 });
 
-// --- 6. 관리자 API (필요 시 별도 추가) ---
-// 승인 대기 중인 광고 리스트 조회
-app.get('/api/admin/pending-ads', authenticateAdmin, async (req, res) => {
-  try {
-    const result = await db.query("SELECT * FROM ad_content WHERE approval_status = 'pending_approval' ORDER BY created_at ASC");
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ message: '승인 대기 광고 목록 조회 실패' });
-  }
+// --- 6. 관리자 API (관리자 인증 추가) ---
+app.get('/api/admin/pending-ads', authenticateToken, isAdmin, async (req, res) => {
+    try {
+        const result = await db.query("SELECT * FROM ad_content WHERE approval_status = 'pending_approval' ORDER BY upload_time ASC");
+        res.json(result.rows);
+    } catch (error) {
+        res.status(500).json({ message: '승인 대기 광고 목록 조회 실패' });
+    }
 });
 
 // 광고 승인 처리
