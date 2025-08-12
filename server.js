@@ -264,6 +264,32 @@ app.get('/api/users/:userId/won-auctions', authenticateToken, async (req, res) =
     }
 });
 
+// 신규: 결제 정보를 생성하고 클라이언트에 전달하는 API
+app.post('/api/payments/request', authenticateToken, async (req, res) => {
+    const { auctionId } = req.body;
+    const { id: userId } = req.user;
+    try {
+        const auctionResult = await db.query(
+            "SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 AND status = 'ended'",
+            [auctionId, userId]
+        );
+        const auction = auctionResult.rows[0];
+
+        if (!auction) {
+            return res.status(403).json({ message: '결제 대상 경매가 아니거나 권한이 없습니다.' });
+        }
+
+        res.json({
+            amount: auction.final_bid,
+            orderId: `canvasx_${auctionId}_${new Date().getTime()}`,
+            orderName: `Canvas X - ${auctionId} 광고권`
+        });
+    } catch (error) {
+        console.error('Payment request error:', error);
+        res.status(500).json({ message: '결제 정보를 생성하는 중 오류가 발생했습니다.' });
+    }
+});
+
 app.post('/api/payments/confirm', authenticateToken, async (req, res) => {
     const { paymentKey, orderId, amount } = req.body;
     try {
