@@ -389,7 +389,7 @@ app.get('/api/admin/pending-ads', authenticateToken, isAdmin, async (req, res) =
 });
 
 // 광고 승인 처리
-app.post('/api/admin/ads/:adId/approve', isAdmin, async (req, res) => {
+app.post('/api/admin/ads/:adId/approve', authenticateToken, isAdmin, async (req, res) => {
   const adId = req.params.adId;
   try {
     await db.query('BEGIN');
@@ -406,7 +406,7 @@ app.post('/api/admin/ads/:adId/approve', isAdmin, async (req, res) => {
 });
 
 // 광고 거절 처리
-app.post('/api/admin/ads/:adId/reject', isAdmin, async (req, res) => {
+app.post('/api/admin/ads/:adId/reject', authenticateToken, isAdmin, async (req, res) => {
   const adId = req.params.adId;
   try {
     await db.query('BEGIN');
