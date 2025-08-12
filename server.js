@@ -27,7 +27,6 @@ const app = express();
 // --- CORS 설정 ---
 const whitelist = [
     'http://localhost:3000',
-    'https://cool-semifreddo-6004a7.netlify.app',
     'https://canvasx.netlify.app'
 ];
 const corsOptions = {
@@ -250,10 +249,15 @@ app.post('/api/auctions/:id/bid', authenticateToken, async (req, res) => {
     }
 });
 
+// --- 3. 대시보드 API (수정) ---
 app.get('/api/users/:userId/won-auctions', authenticateToken, async (req, res) => {
     if (req.user.id !== req.params.userId && !req.user.is_admin) return res.sendStatus(403);
     try {
-        const result = await db.query("SELECT * FROM auctions WHERE final_winner_id = $1 AND status != 'active' ORDER BY id DESC", [req.params.userId]);
+        // FIX: 취소(cancelled)되거나 환불(refunded)된 경매는 제외하고 조회합니다.
+        const result = await db.query(
+            "SELECT * FROM auctions WHERE final_winner_id = $1 AND status NOT IN ('active', 'cancelled', 'refunded', 'failed') ORDER BY id DESC",
+            [req.params.userId]
+        );
         res.json(result.rows);
     } catch (error) {
         res.status(500).json({ message: '낙찰 내역 조회 실패' });
@@ -282,17 +286,25 @@ app.post('/api/payments/confirm', authenticateToken, async (req, res) => {
     }
 });
 
+// --- 4. 낙찰 포기 및 환불 API (수정) ---
 app.post('/api/auctions/:auctionId/cancel', authenticateToken, async (req, res) => {
     const { auctionId } = req.params;
     const { id: userId } = req.user;
-    const client = await getDbClient();
+    const client = await db.connect();
     try {
         await client.query('BEGIN');
-        const auctionResult = await client.query("SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 AND status = 'ended' FOR UPDATE", [auctionId, userId]);
+        const auctionResult = await client.query(
+            "SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 AND status = 'ended' FOR UPDATE",
+            [auctionId, userId]
+        );
         if (auctionResult.rows.length === 0) throw new Error('낙찰을 포기할 수 없는 상태입니다.');
+        
+        // FIX: 상태를 'cancelled'로 먼저 변경합니다.
+        await client.query("UPDATE auctions SET status = 'cancelled' WHERE id = $1", [auctionId]);
+        
         await offerToSecondBidder(client, auctionId);
         await client.query('COMMIT');
-        res.status(200).json({ message: '낙찰을 포기했습니다.' });
+        res.status(200).json({ message: '낙찰을 포기했습니다. 차순위 입찰자에게 기회가 넘어갑니다.' });
     } catch (error) {
         await client.query('ROLLBACK');
         res.status(400).json({ message: error.message });
@@ -304,10 +316,13 @@ app.post('/api/auctions/:auctionId/cancel', authenticateToken, async (req, res) 
 app.post('/api/auctions/:auctionId/refund', authenticateToken, async (req, res) => {
     const { auctionId } = req.params;
     const { id: userId } = req.user;
-    const client = await getDbClient();
+    const client = await db.connect();
     try {
         await client.query('BEGIN');
-        const auctionResult = await client.query("SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 FOR UPDATE", [auctionId, userId]);
+        const auctionResult = await client.query(
+            "SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 FOR UPDATE",
+            [auctionId, userId]
+        );
         if (auctionResult.rows.length === 0) throw new Error('환불을 요청할 수 없는 경매입니다.');
         const auction = auctionResult.rows[0];
         const auctionDate = new Date(auction.id);
@@ -328,6 +343,9 @@ app.post('/api/auctions/:auctionId/refund', authenticateToken, async (req, res) 
             const refundError = await refundResponse.json();
             throw new Error(refundError.message || '토스페이먼츠 환불 처리 중 오류가 발생했습니다.');
         }
+        // FIX: 상태를 'refunded'로 먼저 변경합니다.
+        await client.query("UPDATE auctions SET status = 'refunded' WHERE id = $1", [auctionId]);
+
         await offerToSecondBidder(client, auctionId);
         const adContentResult = await client.query("DELETE FROM ad_content WHERE auction_id = $1 RETURNING content_url", [auctionId]);
         if (adContentResult.rows.length > 0) {
