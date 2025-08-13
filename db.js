@@ -18,4 +18,7 @@ module.exports = {
     
     // 서버가 트랜잭션 관리를 위해 데이터베이스와 직접 연결할 수 있도록 connect 함수를 추가로 내보냅니다.
     connect: () => pool.connect(),
+
+    // 리팩터링된 코드와의 호환성을 위해 pool 객체도 내보냅니다.
+    pool: pool 
 };
