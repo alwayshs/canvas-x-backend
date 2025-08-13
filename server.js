@@ -313,22 +313,27 @@ app.post('/api/payments/confirm', authenticateToken, async (req, res) => {
 });
 
 // --- 4. 낙찰 포기 및 환불 API (수정) ---
+// 낙찰 포기
 app.post('/api/auctions/:auctionId/cancel', authenticateToken, async (req, res) => {
     const { auctionId } = req.params;
     const { id: userId } = req.user;
     const client = await db.connect();
     try {
         await client.query('BEGIN');
+
+        // 현재 낙찰자가 맞고 상태가 ended인 경우만
         const auctionResult = await client.query(
             "SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 AND status = 'ended' FOR UPDATE",
             [auctionId, userId]
         );
         if (auctionResult.rows.length === 0) throw new Error('낙찰을 포기할 수 없는 상태입니다.');
-        
-        // FIX: 상태를 'cancelled'로 먼저 변경합니다.
+
+        // 상태를 먼저 cancelled로
         await client.query("UPDATE auctions SET status = 'cancelled' WHERE id = $1", [auctionId]);
-        
+
+        // 차순위 입찰자에게 기회 제공
         await offerToSecondBidder(client, auctionId);
+
         await client.query('COMMIT');
         res.status(200).json({ message: '낙찰을 포기했습니다. 차순위 입찰자에게 기회가 넘어갑니다.' });
     } catch (error) {
@@ -339,24 +344,32 @@ app.post('/api/auctions/:auctionId/cancel', authenticateToken, async (req, res) 
     }
 });
 
+// 환불 요청
 app.post('/api/auctions/:auctionId/refund', authenticateToken, async (req, res) => {
     const { auctionId } = req.params;
     const { id: userId } = req.user;
     const client = await db.connect();
     try {
         await client.query('BEGIN');
+
+        // 현재 낙찰자 확인
         const auctionResult = await client.query(
             "SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 FOR UPDATE",
             [auctionId, userId]
         );
         if (auctionResult.rows.length === 0) throw new Error('환불을 요청할 수 없는 경매입니다.');
         const auction = auctionResult.rows[0];
+
+        // 환불 기한 확인 (당일 17시까지)
         const auctionDate = new Date(auction.id);
         const refundDeadline = new Date(auctionDate.getFullYear(), auctionDate.getMonth(), auctionDate.getDate(), 17, 0, 0);
         if (new Date() > refundDeadline) throw new Error('환불 가능한 시간이 지났습니다 (당일 17시까지).');
+
         const paymentKey = auction.payment_key;
         if (!paymentKey) throw new Error('결제 정보를 찾을 수 없어 환불할 수 없습니다.');
         if (!fetchFn) throw new Error('fetch is not available');
+
+        // 토스페이먼츠 환불 요청
         const refundResponse = await fetchFn(`https://api.tosspayments.com/v1/payments/${paymentKey}/cancel`, {
             method: 'POST',
             headers: {
@@ -369,15 +382,20 @@ app.post('/api/auctions/:auctionId/refund', authenticateToken, async (req, res) 
             const refundError = await refundResponse.json();
             throw new Error(refundError.message || '토스페이먼츠 환불 처리 중 오류가 발생했습니다.');
         }
-        // FIX: 상태를 'refunded'로 먼저 변경합니다.
+
+        // 상태를 먼저 refunded로 변경
         await client.query("UPDATE auctions SET status = 'refunded' WHERE id = $1", [auctionId]);
 
+        // 차순위 입찰자에게 기회 제공
         await offerToSecondBidder(client, auctionId);
+
+        // 광고 콘텐츠 삭제
         const adContentResult = await client.query("DELETE FROM ad_content WHERE auction_id = $1 RETURNING content_url", [auctionId]);
         if (adContentResult.rows.length > 0) {
             const safePath = path.join(__dirname, adContentResult.rows[0].content_url.replace(/^\//, ''));
             fs.unlink(safePath, (err) => { if (err) console.error("Error deleting refunded ad file:", err); });
         }
+
         await client.query('COMMIT');
         res.status(200).json({ message: '환불이 요청되었습니다.' });
     } catch (error) {
