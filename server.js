@@ -148,12 +148,17 @@ async function manageAuctions() {
     }
 }
 
-// --- 공통 로직: 차순위 입찰자에게 기회 제공 ---
-async function offerToSecondBidder(client, auctionId) {
+// --- 공통 로직: 차순위 입찰자에게 기회 제공 (수정) ---
+async function offerToSecondBidder(client, auctionId, previousWinnerId) {
+    // FIX: 이전 낙찰자를 제외하고, 그 다음으로 높은 금액을 제시한 '다른' 사용자를 찾습니다.
     const secondBidderResult = await client.query(
-        "SELECT user_id, amount FROM bids WHERE auction_id = $1 ORDER BY amount DESC, created_at ASC LIMIT 1 OFFSET 1",
-        [auctionId]
+        `SELECT user_id, amount FROM bids 
+         WHERE auction_id = $1 AND user_id != $2 
+         ORDER BY amount DESC, created_at ASC 
+         LIMIT 1`,
+        [auctionId, previousWinnerId]
     );
+
     if (secondBidderResult.rows.length > 0) {
         const secondBidder = secondBidderResult.rows[0];
         await client.query(
@@ -226,17 +231,22 @@ app.get('/api/auctions/:id', async (req, res) => {
     }
 });
 
+// --- 2. 경매 API (입찰 로직 수정) ---
 app.post('/api/auctions/:id/bid', authenticateToken, async (req, res) => {
     const { amount } = req.body;
     const { id: auctionId } = req.params;
     const { id: userId } = req.user;
-    const client = await getDbClient();
+    const client = await db.connect();
     try {
         await client.query('BEGIN');
         const auctionResult = await client.query("SELECT * FROM auctions WHERE id = $1 FOR UPDATE", [auctionId]);
         const auction = auctionResult.rows[0];
+
+        // FIX: 입찰 유효성 검증 강화
         if (!auction || new Date() > new Date(auction.end_time)) throw new Error('종료된 경매입니다.');
+        if (auction.current_winner_id === userId) throw new Error('이미 최고 입찰자입니다.'); // 최고 입찰자 중복 입찰 방지
         if (amount <= (auction.current_highest_bid || auction.starting_bid)) throw new Error('입찰 금액이 현재 최고가보다 낮습니다.');
+        
         await client.query('UPDATE auctions SET current_highest_bid = $1, current_winner_id = $2 WHERE id = $3', [amount, userId, auctionId]);
         await client.query('INSERT INTO bids (auction_id, user_id, amount) VALUES ($1, $2, $3)', [auctionId, userId, amount]);
         await client.query('COMMIT');
