@@ -7,6 +7,8 @@ const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
+const multerS3 = require('multer-s3');
+const { S3Client } = require('@aws-sdk/client-s3');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
@@ -23,6 +25,31 @@ if (!fetchFn) {
 }
 
 const app = express();
+
+// --- Cloudflare R2 설정 ---
+// 이 값들은 Render의 환경 변수에서 불러옵니다.
+const s3 = new S3Client({
+    region: 'auto',
+    endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    credentials: {
+        accessKeyId: process.env.R2_ACCESS_KEY_ID,
+        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+    },
+});
+
+const upload = multer({
+    storage: multerS3({
+        s3: s3,
+        bucket: process.env.R2_BUCKET_NAME,
+        acl: 'public-read', // 파일을 공개적으로 읽을 수 있도록 설정
+        metadata: function (req, file, cb) {
+            cb(null, { fieldName: file.fieldname });
+        },
+        key: function (req, file, cb) {
+            cb(null, `ads/${Date.now().toString()}-${file.originalname}`);
+        }
+    })
+});
 
 // --- CORS 설정 ---
 const whitelist = [
@@ -553,19 +580,35 @@ app.post('/api/ad-content/upload', authenticateToken, upload.single('adFile'), a
     const { auctionId } = req.body;
     const { id: userId } = req.user;
     const file = req.file;
-    if (!file) return res.status(400).json({ message: '파일이 없습니다.' });
-    const client = await getDbClient();
+
+    if (!file) {
+        return res.status(400).json({ message: '파일이 없습니다.' });
+    }
+
+    // multer-s3는 file.location에 전체 URL을 제공합니다.
+    const contentUrl = file.location; 
+    const contentType = file.mimetype;
+
+    const client = await db.connect();
     try {
-        const contentUrl = `/uploads/${file.filename}`;
         await client.query('BEGIN');
-        const auctionResult = await client.query("SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 AND (status = 'paid' OR status = 'rejected') FOR UPDATE", [auctionId, userId]);
+        const auctionResult = await client.query(
+            "SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 AND (status = 'paid' OR status = 'rejected') FOR UPDATE",
+            [auctionId, userId]
+        );
         if (auctionResult.rows.length === 0) throw new Error('업로드 권한이 없거나 경매 상태가 올바르지 않습니다.');
-        await client.query('INSERT INTO ad_content (auction_id, owner_id, content_type, content_url, approval_status) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (auction_id) DO UPDATE SET content_url = EXCLUDED.content_url, approval_status = EXCLUDED.approval_status, upload_time = CURRENT_TIMESTAMP', [auctionId, userId, file.mimetype, contentUrl, 'pending_approval']);
+        
+        await client.query(
+            'INSERT INTO ad_content (auction_id, owner_id, content_type, content_url, approval_status) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (auction_id) DO UPDATE SET content_url = EXCLUDED.content_url, approval_status = EXCLUDED.approval_status, upload_time = CURRENT_TIMESTAMP',
+            [auctionId, userId, contentType, contentUrl, 'pending_approval']
+        );
         await client.query("UPDATE auctions SET status = 'pending_approval' WHERE id = $1", [auctionId]);
+        
         await client.query('COMMIT');
         res.status(201).json({ message: '광고가 성공적으로 업로드되었으며, 관리자 승인을 기다리고 있습니다.' });
     } catch (error) {
         await client.query('ROLLBACK');
+        console.error('광고 업로드 실패:', error);
         res.status(400).json({ message: error.message });
     } finally {
         client.release();
