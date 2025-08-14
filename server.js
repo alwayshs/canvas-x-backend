@@ -495,6 +495,88 @@ app.patch('/api/admin/ad-content/:id/status', authenticateToken, isAdmin, async 
     }
 });
 
+// --- 7. 아카이브 API (신규) ---
+app.get('/api/archive', async (req, res) => {
+    try {
+        // 1. 역대 최고가 낙찰 광고 (상위 5개)
+        const topBidsQuery = `
+            SELECT id, final_bid, ad.content_url 
+            FROM auctions a
+            LEFT JOIN ad_content ad ON a.id = ad.auction_id
+            WHERE a.status IN ('completed', 'approved') AND a.final_bid IS NOT NULL
+            ORDER BY a.final_bid DESC
+            LIMIT 5;
+        `;
+        const topBidsResult = await db.query(topBidsQuery);
+
+        // 2. 지난달 최고의 광고 (상위 5개 - 인기도는 시뮬레이션)
+        // 실제 운영 시에는 ad_content 테이블에 'likes' 같은 컬럼을 추가해야 합니다.
+        const lastMonthQuery = `
+            SELECT id, final_bid, ad.content_url
+            FROM auctions a
+            LEFT JOIN ad_content ad ON a.id = ad.auction_id
+            WHERE a.status IN ('completed', 'approved') 
+              AND a.id >= date_trunc('month', current_date - interval '1 month')::date::text
+              AND a.id < date_trunc('month', current_date)::date::text
+            ORDER BY RANDOM() -- 인기도 점수를 RANDOM()으로 시뮬레이션
+            LIMIT 5;
+        `;
+        const lastMonthResult = await db.query(lastMonthQuery);
+
+        // 3. 데이터 기반 기록 보관소
+        const records = {};
+        // 3-1. 최초의 광고
+        const firstAdRes = await db.query("SELECT id, ad.content_url FROM auctions a LEFT JOIN ad_content ad ON a.id = ad.auction_id WHERE a.status IN ('completed', 'approved') ORDER BY id ASC LIMIT 1");
+        records.firstAd = firstAdRes.rows[0];
+        
+        // 3-2. 가장 치열했던 경매
+        const fiercestAuctionRes = await db.query("SELECT auction_id, COUNT(*) as count FROM bids GROUP BY auction_id ORDER BY count DESC LIMIT 1");
+        if (fiercestAuctionRes.rows.length > 0) {
+            const fiercestId = fiercestAuctionRes.rows[0].auction_id;
+            const fiercestData = await db.query("SELECT id, final_bid, ad.content_url FROM auctions a LEFT JOIN ad_content ad ON a.id = ad.auction_id WHERE a.id = $1", [fiercestId]);
+            records.fiercestAuction = { ...fiercestData.rows[0], count: fiercestAuctionRes.rows[0].count };
+        }
+
+        // 3-3. 최다 참여자 경매
+        const mostParticipantsRes = await db.query("SELECT auction_id, COUNT(DISTINCT user_id) as count FROM bids GROUP BY auction_id ORDER BY count DESC LIMIT 1");
+        if (mostParticipantsRes.rows.length > 0) {
+            const mostParticipantsId = mostParticipantsRes.rows[0].auction_id;
+            const mostParticipantsData = await db.query("SELECT id, final_bid, ad.content_url FROM auctions a LEFT JOIN ad_content ad ON a.id = ad.auction_id WHERE a.id = $1", [mostParticipantsId]);
+            records.mostParticipantsAuction = { ...mostParticipantsData.rows[0], count: mostParticipantsRes.rows[0].count };
+        }
+
+        // 3-4. 역대 최고의 인기 광고 (시뮬레이션)
+        const allTimePopularRes = await db.query("SELECT id, final_bid, ad.content_url FROM auctions a LEFT JOIN ad_content ad ON a.id = ad.auction_id WHERE a.status IN ('completed', 'approved') ORDER BY RANDOM() LIMIT 1");
+        records.allTimePopular = allTimePopularRes.rows[0];
+
+        // 3-5. 마지막 1시간의 라스트 스퍼트
+        const finalHourFrenzyRes = await db.query(`
+            SELECT b.auction_id, COUNT(b.id) as count
+            FROM bids b
+            JOIN auctions a ON b.auction_id = a.id
+            WHERE b.created_at BETWEEN (a.end_time - INTERVAL '1 hour') AND a.end_time
+            GROUP BY b.auction_id
+            ORDER BY count DESC
+            LIMIT 1;
+        `);
+        if (finalHourFrenzyRes.rows.length > 0) {
+            const frenzyId = finalHourFrenzyRes.rows[0].auction_id;
+            const frenzyData = await db.query("SELECT id, final_bid, ad.content_url FROM auctions a LEFT JOIN ad_content ad ON a.id = ad.auction_id WHERE a.id = $1", [frenzyId]);
+            records.finalHourFrenzy = { ...frenzyData.rows[0], count: finalHourFrenzyRes.rows[0].count };
+        }
+
+        res.json({
+            topBids: topBidsResult.rows,
+            lastMonthBest: lastMonthResult.rows,
+            records: records
+        });
+
+    } catch (error) {
+        console.error('Error fetching archive data:', error);
+        res.status(500).json({ message: '아카이브 데이터를 불러오는 중 오류가 발생했습니다.' });
+    }
+});
+
 // 서버 시작
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
