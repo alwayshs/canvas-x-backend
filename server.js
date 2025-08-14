@@ -141,14 +141,13 @@ async function manageAuctions() {
                 // UTC 날짜를 'YYYY-MM-DD' 형식의 문자열로 변환합니다.
                 const newAuctionId = lastDateUTC.toISOString().slice(0, 10);
 
-                // 마감 시간(광고일 하루 전 한국 시간 오전 9시)을 UTC 기준으로 계산합니다.
-                const newEndTime = new Date(lastDateUTC.getTime());
-                newEndTime.setUTCDate(newEndTime.getUTCDate() - 1); // 광고일 하루 전
-                // 한국 오전 9시는 UTC 자정이므로, 시간은 00:00:00.000Z가 맞습니다.
+                // FIX: 마감 시간을 광고일 하루 전 한국 시간 오전 9시(UTC 자정)로 정확하게 계산합니다.
+                const endTimeUTC = new Date(lastDateUTC.getTime());
+                endTimeUTC.setUTCDate(endTimeUTC.getUTCDate() - 1); // 광고일 하루 전
 
                 await client.query(
                     "INSERT INTO auctions (id, start_time, end_time, status, starting_bid) VALUES ($1, NOW(), $2, 'active', 10000) ON CONFLICT (id) DO NOTHING",
-                    [newAuctionId, newEndTime]
+                    [newAuctionId, endTimeUTC]
                 );
             }
         }
