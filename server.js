@@ -83,8 +83,8 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 // JWT 시크릿 키
-const JWT_SECRET = process.env.JWT_SECRET || 'your-very-secret-key-for-canvas-x';
-const TOSS_SECRET_KEY = process.env.TOSS_SECRET_KEY || 'test_sk_ma60RZblrqRmG7MmYpZ68wzYWBn1';
+const JWT_SECRET = process.env.JWT_SECRET
+const TOSS_SECRET_KEY = process.env.TOSS_SECRET_KEY
 
 // --- 미들웨어 ---
 function authenticateToken(req, res, next) {
