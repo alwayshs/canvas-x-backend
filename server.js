@@ -385,21 +385,22 @@ app.post('/api/auctions/:auctionId/cancel', authenticateToken, async (req, res) 
     const client = await db.connect();
     try {
         await client.query('BEGIN');
-
-        // 상태 조건을 실제 DB 상태에 맞게 확장
+        
+        // 1. 먼저, 현재 경매의 모든 정보를 가져와 'auction' 변수에 저장합니다.
         const auctionResult = await client.query(
-            "SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 AND status IN ('ended', 'paid') FOR UPDATE",
+            "SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 AND status = 'ended' FOR UPDATE",
             [auctionId, userId]
         );
-
         if (auctionResult.rows.length === 0) throw new Error('낙찰을 포기할 수 없는 상태입니다.');
+        
+        const auction = auctionResult.rows[0]; // <- 여기에 이전 낙찰자 ID가 안전하게 저장됩니다.
 
-        // 상태를 'cancelled'로 먼저 변경
+        // 2. 그 다음, 경매 상태를 'cancelled'로 변경합니다.
         await client.query("UPDATE auctions SET status = 'cancelled' WHERE id = $1", [auctionId]);
-
-        // 차순위 입찰자에게 기회 제공
+        
+        // 3. 마지막으로, 아까 저장해두었던 'auction.final_winner_id'를 이용해 차순위 입찰자를 찾습니다.
         await offerToSecondBidder(client, auctionId, auction.final_winner_id);
-
+        
         await client.query('COMMIT');
         res.status(200).json({ message: '낙찰을 포기했습니다. 차순위 입찰자에게 기회가 넘어갑니다.' });
     } catch (error) {
