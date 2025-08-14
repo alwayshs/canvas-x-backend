@@ -69,19 +69,6 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// --- 파일 업로드 설정 ---
-const uploadDir = 'uploads';
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, uploadDir + '/'),
-    filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-    }
-});
-const upload = multer({ storage: storage });
-
 // JWT 시크릿 키
 const JWT_SECRET = process.env.JWT_SECRET
 const TOSS_SECRET_KEY = process.env.TOSS_SECRET_KEY
