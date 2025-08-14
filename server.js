@@ -195,6 +195,44 @@ async function offerToSecondBidder(client, auctionId, forfeitedUserIds = []) {
 // =============================================
 
 // --- 1. 사용자 인증 API (수정) ---
+// 신규: 본인인증 결과 서버에서 검증 API
+app.post('/api/verify-identity', async (req, res) => {
+    const { txId } = req.body;
+    // 실제 운영 시에는 authRequestUrl을 함께 받아 이니시스 URL인지 검증해야 합니다.
+    const authRequestUrl = `https://kssa.inicis.com/sa/result`; // 테스트용 URL
+
+    try {
+        // success.jsp의 로직을 Node.js로 구현
+        const response = await fetch(authRequestUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                mid: "INIiasTest", // 테스트 MID
+                txId: txId
+            })
+        });
+
+        const resultData = await response.json();
+
+        if (resultData.resultCode !== '0000') {
+            throw new Error(resultData.resultMsg || '본인인증 결과 조회에 실패했습니다.');
+        }
+
+        // 실제 운영 시에는 reservedMsg: "isUseToken=Y" 옵션을 사용했다면,
+        // 함께 전달된 token을 이용해 resultData의 개인정보를 복호화해야 합니다.
+        // 여기서는 복호화 과정 없이 테스트 데이터를 반환합니다.
+        const userInfo = {
+            ci: resultData.userCi || `simulated_ci_${txId}`, // KG이니시스가 userCi를 반환합니다. (없을 경우 시뮬레이션)
+            di: resultData.userDi || `simulated_di_${txId}`  // KG이니시스가 userDi를 반환합니다. (없을 경우 시뮬레이션)
+        };
+
+        res.json(userInfo);
+
+    } catch (error) {
+        console.error('Identity verification error:', error);
+        res.status(500).json({ message: error.message });
+    }
+});
 app.post('/api/users/signup', async (req, res) => {
     // ci, di 값을 추가로 받습니다.
     const { email, password, nickname, ci, di } = req.body; 
@@ -202,7 +240,7 @@ app.post('/api/users/signup', async (req, res) => {
         return res.status(400).json({ message: '모든 필드를 입력해주세요.' });
     }
     try {
-        // FIX: CI 또는 DI 값이 이미 데이터베이스에 있는지 확인하여 중복 가입을 방지합니다.
+        // CI 또는 DI 값이 이미 데이터베이스에 있는지 확인하여 중복 가입을 방지합니다.
         const existingUser = await db.query(
             'SELECT id FROM users WHERE ci = $1 OR di = $2',
             [ci, di]
