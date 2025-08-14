@@ -509,16 +509,15 @@ app.get('/api/archive', async (req, res) => {
         `;
         const topBidsResult = await db.query(topBidsQuery);
 
-        // 2. 지난달 최고의 광고 (상위 5개 - 인기도는 시뮬레이션)
-        // 실제 운영 시에는 ad_content 테이블에 'likes' 같은 컬럼을 추가해야 합니다.
+        // 2. 지난달 최고의 광고 (실제 likes 기준으로 정렬)
         const lastMonthQuery = `
-            SELECT id, final_bid, ad.content_url
+            SELECT a.id, a.final_bid, ad.content_url, ad.likes
             FROM auctions a
-            LEFT JOIN ad_content ad ON a.id = ad.auction_id
+            JOIN ad_content ad ON a.id = ad.auction_id
             WHERE a.status IN ('completed', 'approved') 
               AND a.id >= date_trunc('month', current_date - interval '1 month')::date::text
               AND a.id < date_trunc('month', current_date)::date::text
-            ORDER BY RANDOM() -- 인기도 점수를 RANDOM()으로 시뮬레이션
+            ORDER BY ad.likes DESC, a.final_bid DESC -- FIX: 인기도(likes) 순으로 정렬
             LIMIT 5;
         `;
         const lastMonthResult = await db.query(lastMonthQuery);
@@ -545,8 +544,15 @@ app.get('/api/archive', async (req, res) => {
             records.mostParticipantsAuction = { ...mostParticipantsData.rows[0], count: mostParticipantsRes.rows[0].count };
         }
 
-        // 3-4. 역대 최고의 인기 광고 (시뮬레이션)
-        const allTimePopularRes = await db.query("SELECT id, final_bid, ad.content_url FROM auctions a LEFT JOIN ad_content ad ON a.id = ad.auction_id WHERE a.status IN ('completed', 'approved') ORDER BY RANDOM() LIMIT 1");
+        // 3-4. 역대 최고의 인기 광고 (실제 likes 기준으로 조회)
+        const allTimePopularRes = await db.query(`
+            SELECT a.id, a.final_bid, ad.content_url, ad.likes 
+            FROM auctions a
+            JOIN ad_content ad ON a.id = ad.auction_id
+            WHERE a.status IN ('completed', 'approved') 
+            ORDER BY ad.likes DESC, a.final_bid DESC 
+            LIMIT 1
+        `);
         records.allTimePopular = allTimePopularRes.rows[0];
 
         // 3-5. 마지막 1시간의 라스트 스퍼트
@@ -574,6 +580,28 @@ app.get('/api/archive', async (req, res) => {
     } catch (error) {
         console.error('Error fetching archive data:', error);
         res.status(500).json({ message: '아카이브 데이터를 불러오는 중 오류가 발생했습니다.' });
+    }
+});
+
+// --- 8. 인기도 API (신규) ---
+// 광고에 '좋아요'를 추가하는 API
+app.post('/api/ads/:auctionId/like', authenticateToken, async (req, res) => {
+    const { auctionId } = req.params;
+    try {
+        // ad_content 테이블에서 해당 광고의 likes를 1 증가시킵니다.
+        const result = await db.query(
+            "UPDATE ad_content SET likes = likes + 1 WHERE auction_id = $1 RETURNING likes",
+            [auctionId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: '좋아요를 누를 광고를 찾을 수 없습니다.' });
+        }
+
+        res.status(200).json({ message: '좋아요가 반영되었습니다.', newLikes: result.rows[0].likes });
+    } catch (error) {
+        console.error('Error liking ad:', error);
+        res.status(500).json({ message: '좋아요 처리 중 오류가 발생했습니다.' });
     }
 });
 
