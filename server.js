@@ -124,27 +124,26 @@ async function manageAuctions() {
         if (newAuctionsNeeded > 0) {
             const lastAuctionRes = await client.query("SELECT MAX(id) as last_id FROM auctions");
             
-            let lastDateUTC;
+            let lastDate;
             if (lastAuctionRes.rows[0].last_id) {
-                // DB에 저장된 'YYYY-MM-DD' 문자열을 UTC 자정으로 해석합니다.
-                lastDateUTC = new Date(lastAuctionRes.rows[0].last_id + 'T00:00:00Z');
+                lastDate = new Date(lastAuctionRes.rows[0].last_id + 'T00:00:00'); // 문자열 → Date
             } else {
-                // 경매가 하나도 없으면 오늘 날짜의 UTC 자정을 기준으로 시작합니다.
                 const now = new Date();
-                lastDateUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+                lastDate = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // 오늘 날짜
             }
 
             for (let i = 0; i < newAuctionsNeeded; i++) {
-                // UTC 기준으로 날짜를 하루 더합니다.
-                lastDateUTC.setUTCDate(lastDateUTC.getUTCDate() + 1);
-                
-                // UTC 날짜를 'YYYY-MM-DD' 형식의 문자열로 변환합니다.
-                const newAuctionId = lastDateUTC.toISOString().slice(0, 10);
+                lastDate.setDate(lastDate.getDate() + 1); // 하루 더하기
+                const newAuctionId = lastDate.toISOString().slice(0, 10);
 
-                // FIX: 마감 시간을 광고일 하루 전 한국 시간 오전 9시(UTC 자정)로 정확하게 계산합니다.
-                const endTimeUTC = new Date(lastDateUTC.getTime());
-                endTimeUTC.setUTCDate(endTimeUTC.getUTCDate() - 1); // 광고일 하루 전
-                endTimeUTC.setUTCHours(0 + 0, 0, 0, 0); // UTC 기준 자정 → KST 09:00
+                // KST 오전 9시를 UTC로 변환
+                // KST = UTC+9 → UTC 시간 = KST - 9시간
+                const endTimeUTC = new Date(
+                    lastDate.getFullYear(),
+                    lastDate.getMonth(),
+                    lastDate.getDate() - 1, // 광고일 하루 전
+                    0, 0, 0, 0 // UTC 기준 0시 = KST 오전 9시
+                );
 
                 await client.query(
                     "INSERT INTO auctions (id, start_time, end_time, status, starting_bid) VALUES ($1, NOW(), $2, 'active', 10000) ON CONFLICT (id) DO NOTHING",
