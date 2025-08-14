@@ -144,6 +144,7 @@ async function manageAuctions() {
                 // FIX: 마감 시간을 광고일 하루 전 한국 시간 오전 9시(UTC 자정)로 정확하게 계산합니다.
                 const endTimeUTC = new Date(lastDateUTC.getTime());
                 endTimeUTC.setUTCDate(endTimeUTC.getUTCDate() - 1); // 광고일 하루 전
+                // 한국 오전 9시는 UTC 자정이므로, 시간은 00:00:00.000Z가 맞습니다.
 
                 await client.query(
                     "INSERT INTO auctions (id, start_time, end_time, status, starting_bid) VALUES ($1, NOW(), $2, 'active', 10000) ON CONFLICT (id) DO NOTHING",
