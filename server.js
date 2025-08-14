@@ -291,7 +291,6 @@ app.post('/api/auctions/:id/bid', authenticateToken, async (req, res) => {
 app.get('/api/users/:userId/won-auctions', authenticateToken, async (req, res) => {
     if (req.user.id !== req.params.userId && !req.user.is_admin) return res.sendStatus(403);
     try {
-        // FIX: 취소(cancelled)되거나 환불(refunded)된 경매는 제외하고 조회합니다.
         const result = await db.query(
             "SELECT * FROM auctions WHERE final_winner_id = $1 AND status NOT IN ('active', 'cancelled', 'refunded', 'failed') ORDER BY id DESC",
             [req.params.userId]
@@ -301,6 +300,32 @@ app.get('/api/users/:userId/won-auctions', authenticateToken, async (req, res) =
         res.status(500).json({ message: '낙찰 내역 조회 실패' });
     }
 });
+
+// 신규: 참여중인 경매 목록 조회 API
+app.get('/api/users/:userId/participating-auctions', authenticateToken, async (req, res) => {
+    if (req.user.id !== req.params.userId && !req.user.is_admin) return res.sendStatus(403);
+    try {
+        // 사용자가 입찰한 모든 'active' 상태의 경매를 중복 없이 조회합니다.
+        // 또한, 해당 경매에서 사용자의 최고 입찰액을 함께 조회합니다.
+        const query = `
+            SELECT DISTINCT ON (a.id)
+                a.id,
+                a.end_time,
+                a.current_highest_bid,
+                (SELECT amount FROM bids WHERE auction_id = a.id AND user_id = $1 ORDER BY amount DESC LIMIT 1) AS my_highest_bid
+            FROM auctions a
+            JOIN bids b ON a.id = b.auction_id
+            WHERE a.status = 'active' AND b.user_id = $1
+            ORDER BY a.id DESC;
+        `;
+        const result = await db.query(query, [req.params.userId]);
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error fetching participating auctions:', error);
+        res.status(500).json({ message: '참여중인 경매 내역 조회에 실패했습니다.' });
+    }
+});
+
 
 // 신규: 결제 정보를 생성하고 클라이언트에 전달하는 API
 app.post('/api/payments/request', authenticateToken, async (req, res) => {
