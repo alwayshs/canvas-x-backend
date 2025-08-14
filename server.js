@@ -110,7 +110,6 @@ async function manageAuctions() {
     try {
         await client.query('BEGIN');
 
-        // 1. 종료 시간이 지난 경매들을 'ended' 상태로 변경하고, 최종 낙찰자를 확정합니다.
         const endedResult = await client.query(
             "UPDATE auctions SET status = 'ended', final_bid = current_highest_bid, final_winner_id = current_winner_id WHERE end_time < NOW() AND status = 'active' RETURNING id"
         );
@@ -118,30 +117,34 @@ async function manageAuctions() {
             console.log(`[Scheduler] ${endedResult.rows.length} auctions have ended and winners are finalized.`);
         }
 
-        // 2. 현재 활성 상태인 경매 수 확인
         const activeResult = await client.query("SELECT COUNT(*) FROM auctions WHERE status = 'active'");
         const activeCount = parseInt(activeResult.rows[0].count, 10);
         
         let newAuctionsNeeded = MINIMUM_ACTIVE_AUCTIONS - activeCount;
         if (newAuctionsNeeded > 0) {
             const lastAuctionRes = await client.query("SELECT MAX(id) as last_id FROM auctions");
-            let lastDate = lastAuctionRes.rows[0].last_id ? new Date(lastAuctionRes.rows[0].last_id) : new Date();
+            
+            let lastDateUTC;
+            if (lastAuctionRes.rows[0].last_id) {
+                // DB에 저장된 'YYYY-MM-DD' 문자열을 UTC 자정으로 해석합니다.
+                lastDateUTC = new Date(lastAuctionRes.rows[0].last_id + 'T00:00:00Z');
+            } else {
+                // 경매가 하나도 없으면 오늘 날짜의 UTC 자정을 기준으로 시작합니다.
+                const now = new Date();
+                lastDateUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+            }
 
             for (let i = 0; i < newAuctionsNeeded; i++) {
-                lastDate.setDate(lastDate.getDate() + 1);
-                const newAuctionId = lastDate.toISOString().slice(0, 10);
+                // UTC 기준으로 날짜를 하루 더합니다.
+                lastDateUTC.setUTCDate(lastDateUTC.getUTCDate() + 1);
+                
+                // UTC 날짜를 'YYYY-MM-DD' 형식의 문자열로 변환합니다.
+                const newAuctionId = lastDateUTC.toISOString().slice(0, 10);
 
-                // ▼▼▼ FIX: 타임존 문제를 해결하기 위해 UTC 기준으로 시간을 설정합니다. ▼▼▼
-                const getAuctionEndTime = (dateStr) => {
-                    const date = new Date(dateStr);
-                    // 광고일 하루 전으로 설정
-                    date.setDate(date.getDate() - 1);
-                    // 한국 시간(KST, UTC+9) 오전 9시는 UTC 자정(00:00)입니다.
-                    // setUTCHours를 사용하여 명시적으로 UTC 시간을 설정합니다.
-                    date.setUTCHours(0, 0, 0, 0);
-                    return date;
-                };
-                const newEndTime = getAuctionEndTime(newAuctionId);
+                // 마감 시간(광고일 하루 전 한국 시간 오전 9시)을 UTC 기준으로 계산합니다.
+                const newEndTime = new Date(lastDateUTC.getTime());
+                newEndTime.setUTCDate(newEndTime.getUTCDate() - 1); // 광고일 하루 전
+                // 한국 오전 9시는 UTC 자정이므로, 시간은 00:00:00.000Z가 맞습니다.
 
                 await client.query(
                     "INSERT INTO auctions (id, start_time, end_time, status, starting_bid) VALUES ($1, NOW(), $2, 'active', 10000) ON CONFLICT (id) DO NOTHING",
