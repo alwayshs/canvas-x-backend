@@ -219,13 +219,31 @@ app.post('/api/verify-identity', async (req, res) => {
         if (resultData.resultCode !== '0000') {
             throw new Error(resultData.resultMsg || '본인인증 결과 조회에 실패했습니다.');
         }
+        
+        // --- 성인인증 로직 (핵심) ---
+        // 실제로는 암호화된 userBirth를 복호화해야 합니다. 여기서는 시뮬레이션합니다.
+        const userBirth = resultData.userBirth || '20000101'; // KG이니시스가 userBirth를 반환합니다.
+        const birthDate = new Date(
+            parseInt(userBirth.substring(0, 4), 10),
+            parseInt(userBirth.substring(4, 6), 10) - 1,
+            parseInt(userBirth.substring(6, 8), 10)
+        );
+        const today = new Date();
+        let age = today.getFullYear() - birthDate.getFullYear();
+        const m = today.getMonth() - birthDate.getMonth();
+        if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+            age--;
+        }
 
-        // 실제 운영 시에는 reservedMsg: "isUseToken=Y" 옵션을 사용했다면,
-        // 함께 전달된 token을 이용해 resultData의 개인정보를 복호화해야 합니다.
-        // 여기서는 복호화 과정 없이 테스트 데이터를 반환합니다.
+        if (age < 19) {
+            return res.status(403).json({ message: '만 19세 이상 성인만 가입할 수 있습니다.' });
+        }
+        // ------------------------------
+
         const userInfo = {
-            ci: resultData.userCi || `simulated_ci_${txId}`, // KG이니시스가 userCi를 반환합니다. (없을 경우 시뮬레이션)
-            di: resultData.userDi || `simulated_di_${txId}`  // KG이니시스가 userDi를 반환합니다. (없을 경우 시뮬레이션)
+            ci: resultData.userCi || `simulated_ci_${txId}`,
+            di: resultData.userDi || `simulated_di_${txId}`,
+            birthdate: userBirth
         };
 
         res.json(userInfo);
@@ -235,14 +253,15 @@ app.post('/api/verify-identity', async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 });
+
+
 app.post('/api/users/signup', async (req, res) => {
-    // ci, di 값을 추가로 받습니다.
-    const { email, password, nickname, ci, di } = req.body; 
-    if (!email || !password || !nickname || !ci || !di) {
+    // ci, di, birthdate 값을 추가로 받습니다.
+    const { email, password, nickname, ci, di, birthdate } = req.body; 
+    if (!email || !password || !nickname || !ci || !di || !birthdate) {
         return res.status(400).json({ message: '모든 필드를 입력해주세요.' });
     }
     try {
-        // CI 또는 DI 값이 이미 데이터베이스에 있는지 확인하여 중복 가입을 방지합니다.
         const existingUser = await db.query(
             'SELECT id FROM users WHERE ci = $1 OR di = $2',
             [ci, di]
@@ -255,8 +274,8 @@ app.post('/api/users/signup', async (req, res) => {
         const newUserId = uuidv4();
         
         const newUser = await db.query(
-            'INSERT INTO users (id, email, password_hash, nickname, ci, di) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, email, nickname',
-            [newUserId, email, password_hash, nickname, ci, di]
+            'INSERT INTO users (id, email, password_hash, nickname, ci, di, birthdate) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, email, nickname',
+            [newUserId, email, password_hash, nickname, ci, di, birthdate]
         );
         res.status(201).json(newUser.rows[0]);
     } catch (error) {
