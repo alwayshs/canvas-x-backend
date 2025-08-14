@@ -761,9 +761,9 @@ app.get('/api/archive', async (req, res) => {
     }
 });
 
-// --- 8. 인기도 API (신규) ---
-// 광고에 '좋아요'를 추가하는 API
-app.post('/api/ads/:auctionId/like', authenticateToken, async (req, res) => {
+// --- 8. 인기도 API (수정) ---
+// 광고에 '좋아요'를 추가하는 API (이제 로그인 없이도 가능)
+app.post('/api/ads/:auctionId/like', async (req, res) => {
     const { auctionId } = req.params;
     try {
         // ad_content 테이블에서 해당 광고의 likes를 1 증가시킵니다.
