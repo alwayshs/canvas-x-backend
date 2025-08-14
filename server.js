@@ -190,6 +190,8 @@ async function offerToSecondBidder(client, auctionId, forfeitedUserIds = []) {
     }
 }
 
+
+
 // =============================================
 // API Endpoints
 // =============================================
@@ -729,6 +731,30 @@ app.post('/api/ads/:auctionId/like', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error('Error liking ad:', error);
         res.status(500).json({ message: '좋아요 처리 중 오류가 발생했습니다.' });
+    }
+});
+
+app.get('/api/today', async (req, res) => {
+    try {
+        // FIX: 데이터베이스에 직접 한국 시간 기준 '오늘' 날짜를 물어봅니다.
+        const query = `
+            SELECT a.id, ad.content_url, ad.likes 
+            FROM auctions a
+            JOIN ad_content ad ON a.id = ad.auction_id
+            WHERE a.id = (NOW() AT TIME ZONE 'Asia/Seoul')::date::text
+              AND a.status = 'completed' 
+              AND ad.approval_status = 'approved'
+            LIMIT 1;
+        `;
+        const result = await db.query(query);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: '오늘 게시된 광고가 없습니다.' });
+        }
+        res.json(result.rows[0]);
+    } catch (error) {
+        console.error('Error fetching todays ad:', error);
+        res.status(500).json({ message: '오늘의 광고를 불러오는 중 오류가 발생했습니다.' });
     }
 });
 
