@@ -194,19 +194,33 @@ async function offerToSecondBidder(client, auctionId, forfeitedUserIds = []) {
 // API Endpoints
 // =============================================
 
+// --- 1. 사용자 인증 API (수정) ---
 app.post('/api/users/signup', async (req, res) => {
-    const { email, password, nickname } = req.body;
-    if (!email || !password || !nickname) return res.status(400).json({ message: '모든 필드를 입력해주세요.' });
+    // ci, di 값을 추가로 받습니다.
+    const { email, password, nickname, ci, di } = req.body; 
+    if (!email || !password || !nickname || !ci || !di) {
+        return res.status(400).json({ message: '모든 필드를 입력해주세요.' });
+    }
     try {
+        // FIX: CI 또는 DI 값이 이미 데이터베이스에 있는지 확인하여 중복 가입을 방지합니다.
+        const existingUser = await db.query(
+            'SELECT id FROM users WHERE ci = $1 OR di = $2',
+            [ci, di]
+        );
+        if (existingUser.rows.length > 0) {
+            return res.status(409).json({ message: '이미 본인인증을 통해 가입된 사용자입니다.' });
+        }
+
         const password_hash = await bcrypt.hash(password, 10);
         const newUserId = uuidv4();
+        
         const newUser = await db.query(
-            'INSERT INTO users (id, email, password_hash, nickname) VALUES ($1, $2, $3, $4) RETURNING id, email, nickname',
-            [newUserId, email, password_hash, nickname]
+            'INSERT INTO users (id, email, password_hash, nickname, ci, di) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, email, nickname',
+            [newUserId, email, password_hash, nickname, ci, di]
         );
         res.status(201).json(newUser.rows[0]);
     } catch (error) {
-        console.error('회원가입 오류:', error);
+        console.error('Signup Error:', error);
         res.status(500).json({ message: '회원가입 중 오류가 발생했습니다.' });
     }
 });
