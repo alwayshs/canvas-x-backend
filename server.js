@@ -90,6 +90,17 @@ async function getDbClient() {
     throw new Error('DB client를 얻을 수 없습니다.');
 }
 
+function getBidIncrement(currentBid) {
+    if (currentBid >= 100000000) return 2500000;
+    if (currentBid >= 50000000) return 1000000;
+    if (currentBid >= 10000000) return 500000;
+    if (currentBid >= 5000000) return 250000;
+    if (currentBid >= 1000000) return 100000;
+    if (currentBid >= 250000) return 50000;
+    if (currentBid >= 50000) return 10000;
+    return 5000;
+}
+
 // --- 자동 경매 관리 시스템 ---
 const MINIMUM_ACTIVE_AUCTIONS = 3;
 
@@ -220,18 +231,26 @@ app.get('/api/auctions', async (req, res) => {
     }
 });
 
+// --- 2. 경매 API (수정) ---
 app.get('/api/auctions/:id', async (req, res) => {
     try {
         const auctionResult = await db.query('SELECT * FROM auctions WHERE id = $1', [req.params.id]);
         if (auctionResult.rows.length === 0) return res.status(404).json({ message: '경매를 찾을 수 없습니다.' });
+        
+        const auction = auctionResult.rows[0];
         const bidsResult = await db.query("SELECT b.amount, u.nickname FROM bids b JOIN users u ON b.user_id = u.id WHERE b.auction_id = $1 ORDER BY b.created_at DESC", [req.params.id]);
-        res.json({ auction: auctionResult.rows[0], bids: bidsResult.rows });
+
+        // 최소 다음 입찰가를 계산하여 함께 전달
+        const currentBid = auction.current_highest_bid || auction.starting_bid;
+        const increment = getBidIncrement(currentBid);
+        const minimumNextBid = currentBid + increment;
+
+        res.json({ auction: { ...auction, minimumNextBid }, bids: bidsResult.rows });
     } catch (error) {
         res.status(500).json({ message: '경매 상세 정보 조회 실패' });
     }
 });
 
-// --- 2. 경매 API (입찰 로직 수정) ---
 app.post('/api/auctions/:id/bid', authenticateToken, async (req, res) => {
     const { amount } = req.body;
     const { id: auctionId } = req.params;
@@ -242,11 +261,18 @@ app.post('/api/auctions/:id/bid', authenticateToken, async (req, res) => {
         const auctionResult = await client.query("SELECT * FROM auctions WHERE id = $1 FOR UPDATE", [auctionId]);
         const auction = auctionResult.rows[0];
 
-        // FIX: 입찰 유효성 검증 강화
+        // 입찰 유효성 검증 강화
         if (!auction || new Date() > new Date(auction.end_time)) throw new Error('종료된 경매입니다.');
-        if (auction.current_winner_id === userId) throw new Error('이미 최고 입찰자입니다.'); // 최고 입찰자 중복 입찰 방지
-        if (amount <= (auction.current_highest_bid || auction.starting_bid)) throw new Error('입찰 금액이 현재 최고가보다 낮습니다.');
+        if (auction.current_winner_id === userId) throw new Error('이미 최고 입찰자입니다.');
         
+        const currentBid = auction.current_highest_bid || auction.starting_bid;
+        const increment = getBidIncrement(currentBid);
+        const minimumNextBid = currentBid + increment;
+
+        if (amount < minimumNextBid) {
+            throw new Error(`입찰 금액은 최소 ₩${minimumNextBid.toLocaleString()} 이상이어야 합니다.`);
+        }
+
         await client.query('UPDATE auctions SET current_highest_bid = $1, current_winner_id = $2 WHERE id = $3', [amount, userId, auctionId]);
         await client.query('INSERT INTO bids (auction_id, user_id, amount) VALUES ($1, $2, $3)', [auctionId, userId, amount]);
         await client.query('COMMIT');
