@@ -101,55 +101,52 @@ function getBidIncrement(currentBid) {
     return 5000;
 }
 
-// --- 자동 경매 관리 시스템 ---
+// --- 자동 경매 관리 시스템 (Scheduler) ---
 const MINIMUM_ACTIVE_AUCTIONS = 3;
-
-function formatDateToYMD(date) {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-}
-
-function getAuctionEndTimeFromDate(date) {
-    const end = new Date(date);
-    end.setDate(end.getDate() - 1);
-    end.setHours(9, 0, 0, 0);
-    return end;
-}
 
 async function manageAuctions() {
     console.log('[Scheduler] Running auction management task...');
-    const client = await getDbClient();
+    const client = await db.connect();
     try {
         await client.query('BEGIN');
+
+        // 1. 종료 시간이 지난 경매들을 'ended' 상태로 변경하고, 최종 낙찰자를 확정합니다.
         const endedResult = await client.query(
             "UPDATE auctions SET status = 'ended', final_bid = current_highest_bid, final_winner_id = current_winner_id WHERE end_time < NOW() AND status = 'active' RETURNING id"
         );
         if (endedResult.rows.length > 0) {
-            console.log(`[Scheduler] ${endedResult.rows.length} auctions have ended.`);
+            console.log(`[Scheduler] ${endedResult.rows.length} auctions have ended and winners are finalized.`);
         }
+
+        // 2. 현재 활성 상태인 경매 수 확인
         const activeResult = await client.query("SELECT COUNT(*) FROM auctions WHERE status = 'active'");
         const activeCount = parseInt(activeResult.rows[0].count, 10);
+        
         let newAuctionsNeeded = MINIMUM_ACTIVE_AUCTIONS - activeCount;
         if (newAuctionsNeeded > 0) {
-            console.log(`[Scheduler] Creating ${newAuctionsNeeded} new auctions...`);
             const lastAuctionRes = await client.query("SELECT MAX(id) as last_id FROM auctions");
-            let lastDate = new Date();
-            if (lastAuctionRes.rows[0].last_id) {
-                const parsed = new Date(String(lastAuctionRes.rows[0].last_id));
-                if (!isNaN(parsed.getTime())) lastDate = parsed;
-            }
+            let lastDate = lastAuctionRes.rows[0].last_id ? new Date(lastAuctionRes.rows[0].last_id) : new Date();
+
             for (let i = 0; i < newAuctionsNeeded; i++) {
                 lastDate.setDate(lastDate.getDate() + 1);
-                const newAuctionId = formatDateToYMD(lastDate);
-                const newEndTime = getAuctionEndTimeFromDate(lastDate);
+                const newAuctionId = lastDate.toISOString().slice(0, 10);
+
+                // ▼▼▼ 바로 이 부분이 경매 마감 시간을 설정하는 핵심 로직입니다. ▼▼▼
+                const getAuctionEndTime = (dateStr) => {
+                    const date = new Date(dateStr);
+                    date.setDate(date.getDate() - 1); // 광고일 하루 전으로 설정
+                    date.setHours(9, 0, 0, 0);      // 시간을 오전 9시로 설정
+                    return date;
+                };
+                const newEndTime = getAuctionEndTime(newAuctionId);
+
                 await client.query(
                     "INSERT INTO auctions (id, start_time, end_time, status, starting_bid) VALUES ($1, NOW(), $2, 'active', 10000) ON CONFLICT (id) DO NOTHING",
                     [newAuctionId, newEndTime]
                 );
             }
         }
+
         await client.query('COMMIT');
     } catch (error) {
         await client.query('ROLLBACK');
