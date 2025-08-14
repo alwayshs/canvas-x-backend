@@ -131,11 +131,14 @@ async function manageAuctions() {
                 lastDate.setDate(lastDate.getDate() + 1);
                 const newAuctionId = lastDate.toISOString().slice(0, 10);
 
-                // ▼▼▼ 바로 이 부분이 경매 마감 시간을 설정하는 핵심 로직입니다. ▼▼▼
+                // ▼▼▼ FIX: 타임존 문제를 해결하기 위해 UTC 기준으로 시간을 설정합니다. ▼▼▼
                 const getAuctionEndTime = (dateStr) => {
                     const date = new Date(dateStr);
-                    date.setDate(date.getDate() - 1); // 광고일 하루 전으로 설정
-                    date.setHours(9, 0, 0, 0);      // 시간을 오전 9시로 설정
+                    // 광고일 하루 전으로 설정
+                    date.setDate(date.getDate() - 1);
+                    // 한국 시간(KST, UTC+9) 오전 9시는 UTC 자정(00:00)입니다.
+                    // setUTCHours를 사용하여 명시적으로 UTC 시간을 설정합니다.
+                    date.setUTCHours(0, 0, 0, 0);
                     return date;
                 };
                 const newEndTime = getAuctionEndTime(newAuctionId);
