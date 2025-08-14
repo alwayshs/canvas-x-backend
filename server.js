@@ -175,14 +175,16 @@ async function offerToSecondBidder(client, auctionId, previousWinnerId) {
     if (secondBidderResult.rows.length > 0) {
         const secondBidder = secondBidderResult.rows[0];
         await client.query(
-            "UPDATE auctions SET status = 'ended', final_winner_id = $1, final_bid = $2 WHERE id = $3",
+            "UPDATE auctions SET status = 'ended', final_winner_id = $1, final_bid = $2, current_winner_id = $1, current_highest_bid = $2 WHERE id = $3",
             [secondBidder.user_id, secondBidder.amount, auctionId]
         );
+        console.log(`[Second Chance] Offered auction ${auctionId} to ${secondBidder.user_id}`);
     } else {
         await client.query(
             "UPDATE auctions SET status = 'failed', final_winner_id = NULL, final_bid = NULL WHERE id = $1",
             [auctionId]
         );
+        console.log(`[Second Chance] No second bidder for auction ${auctionId}. Marked as failed.`);
     }
 }
 
@@ -452,8 +454,8 @@ app.post('/api/auctions/:auctionId/refund', authenticateToken, async (req, res) 
         await client.query("UPDATE auctions SET status = 'refunded' WHERE id = $1", [auctionId]);
 
         // 차순위 입찰자에게 기회 제공
-        await offerToSecondBidder(client, auctionId);
-
+        await offerToSecondBidder(client, auctionId, auction.final_winner_id);
+        
         // 업로드된 광고 파일 삭제
         const adContentResult = await client.query("DELETE FROM ad_content WHERE auction_id = $1 RETURNING content_url", [auctionId]);
         if (adContentResult.rows.length > 0) {
