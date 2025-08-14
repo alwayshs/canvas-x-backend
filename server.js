@@ -162,21 +162,23 @@ async function manageAuctions() {
 }
 
 // --- 공통 로직: 차순위 입찰자에게 기회 제공 (수정) ---
-async function offerToSecondBidder(client, auctionId, previousWinnerId) {
-    // FIX: 이전 낙찰자를 제외하고, 그 다음으로 높은 금액을 제시한 '다른' 사용자를 찾습니다.
+async function offerToSecondBidder(client, auctionId, forfeitedUserIds = []) {
+    // FIX: 이미 포기한 사용자들을 제외하고, 그 다음으로 높은 금액을 제시한 '다른' 사용자를 찾습니다.
     const secondBidderResult = await client.query(
-        `SELECT user_id, amount FROM bids 
-         WHERE auction_id = $1 AND user_id != $2 
-         ORDER BY amount DESC, created_at ASC 
+        `SELECT user_id, MAX(amount) as max_bid
+         FROM bids 
+         WHERE auction_id = $1 AND user_id NOT IN (${forfeitedUserIds.map((_, i) => `$${i + 2}`).join(',')})
+         GROUP BY user_id
+         ORDER BY max_bid DESC
          LIMIT 1`,
-        [auctionId, previousWinnerId]
+        [auctionId, ...forfeitedUserIds]
     );
 
     if (secondBidderResult.rows.length > 0) {
         const secondBidder = secondBidderResult.rows[0];
         await client.query(
             "UPDATE auctions SET status = 'ended', final_winner_id = $1, final_bid = $2, current_winner_id = $1, current_highest_bid = $2 WHERE id = $3",
-            [secondBidder.user_id, secondBidder.amount, auctionId]
+            [secondBidder.user_id, secondBidder.max_bid, auctionId]
         );
         console.log(`[Second Chance] Offered auction ${auctionId} to ${secondBidder.user_id}`);
     } else {
@@ -184,7 +186,7 @@ async function offerToSecondBidder(client, auctionId, previousWinnerId) {
             "UPDATE auctions SET status = 'failed', final_winner_id = NULL, final_bid = NULL WHERE id = $1",
             [auctionId]
         );
-        console.log(`[Second Chance] No second bidder for auction ${auctionId}. Marked as failed.`);
+        console.log(`[Second Chance] No other bidders for auction ${auctionId}. Marked as failed.`);
     }
 }
 
@@ -399,7 +401,7 @@ app.post('/api/auctions/:auctionId/cancel', authenticateToken, async (req, res) 
         await client.query("UPDATE auctions SET status = 'cancelled' WHERE id = $1", [auctionId]);
         
         // 3. 마지막으로, 아까 저장해두었던 'auction.final_winner_id'를 이용해 차순위 입찰자를 찾습니다.
-        await offerToSecondBidder(client, auctionId, auction.final_winner_id);
+        await offerToSecondBidder(client, auctionId, [auction.final_winner_id]);
         
         await client.query('COMMIT');
         res.status(200).json({ message: '낙찰을 포기했습니다. 차순위 입찰자에게 기회가 넘어갑니다.' });
@@ -455,7 +457,7 @@ app.post('/api/auctions/:auctionId/refund', authenticateToken, async (req, res) 
         await client.query("UPDATE auctions SET status = 'refunded' WHERE id = $1", [auctionId]);
 
         // 차순위 입찰자에게 기회 제공
-        await offerToSecondBidder(client, auctionId, auction.final_winner_id);
+        await offerToSecondBidder(client, auctionId, [auction.final_winner_id]);
         
         // 업로드된 광고 파일 삭제
         const adContentResult = await client.query("DELETE FROM ad_content WHERE auction_id = $1 RETURNING content_url", [auctionId]);
