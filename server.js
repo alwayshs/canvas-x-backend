@@ -398,7 +398,7 @@ app.post('/api/auctions/:auctionId/cancel', authenticateToken, async (req, res) 
         await client.query("UPDATE auctions SET status = 'cancelled' WHERE id = $1", [auctionId]);
 
         // 차순위 입찰자에게 기회 제공
-        await offerToSecondBidder(client, auctionId);
+        await offerToSecondBidder(client, auctionId, auction.final_winner_id);
 
         await client.query('COMMIT');
         res.status(200).json({ message: '낙찰을 포기했습니다. 차순위 입찰자에게 기회가 넘어갑니다.' });
