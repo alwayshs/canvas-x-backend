@@ -511,29 +511,40 @@ app.get('/api/archive', async (req, res) => {
 
         // 2. 지난달 최고의 광고 (상위 5개 - 인기도는 시뮬레이션)
         const lastMonthQuery = `
-            SELECT a.id, a.final_bid, ad.content_url
+            SELECT a.id, a.final_bid, ad.content_url, ad.likes
             FROM auctions a
             LEFT JOIN ad_content ad ON a.id = ad.auction_id
             WHERE a.status IN ('completed', 'approved') 
               AND a.id >= date_trunc('month', current_date - interval '1 month')::date::text
               AND a.id < date_trunc('month', current_date)::date::text
-            ORDER BY RANDOM() -- 인기도 점수를 RANDOM()으로 시뮬레이션
+            ORDER BY ad.likes DESC NULLS LAST, a.final_bid DESC
             LIMIT 5;
         `;
         const lastMonthResult = await db.query(lastMonthQuery);
 
         // 3. 데이터 기반 기록 보관소
-        const records = {};
+        const records = {
+            firstAd: null,
+            fiercestAuction: null,
+            mostParticipantsAuction: null,
+            allTimePopular: null,
+            finalHourFrenzy: null,
+        };
+
         // 3-1. 최초의 광고
         const firstAdRes = await db.query("SELECT a.id, ad.content_url FROM auctions a LEFT JOIN ad_content ad ON a.id = ad.auction_id WHERE a.status IN ('completed', 'approved') ORDER BY a.id ASC LIMIT 1");
-        records.firstAd = firstAdRes.rows[0];
+        if (firstAdRes.rows.length > 0) {
+            records.firstAd = firstAdRes.rows[0];
+        }
         
         // 3-2. 가장 치열했던 경매
         const fiercestAuctionRes = await db.query("SELECT auction_id, COUNT(*) as count FROM bids GROUP BY auction_id ORDER BY count DESC LIMIT 1");
         if (fiercestAuctionRes.rows.length > 0) {
             const fiercestId = fiercestAuctionRes.rows[0].auction_id;
             const fiercestData = await db.query("SELECT a.id, a.final_bid, ad.content_url FROM auctions a LEFT JOIN ad_content ad ON a.id = ad.auction_id WHERE a.id = $1", [fiercestId]);
-            records.fiercestAuction = { ...fiercestData.rows[0], count: fiercestAuctionRes.rows[0].count };
+            if (fiercestData.rows.length > 0) {
+                records.fiercestAuction = { ...fiercestData.rows[0], count: fiercestAuctionRes.rows[0].count };
+            }
         }
 
         // 3-3. 최다 참여자 경매
@@ -541,12 +552,23 @@ app.get('/api/archive', async (req, res) => {
         if (mostParticipantsRes.rows.length > 0) {
             const mostParticipantsId = mostParticipantsRes.rows[0].auction_id;
             const mostParticipantsData = await db.query("SELECT a.id, a.final_bid, ad.content_url FROM auctions a LEFT JOIN ad_content ad ON a.id = ad.auction_id WHERE a.id = $1", [mostParticipantsId]);
-            records.mostParticipantsAuction = { ...mostParticipantsData.rows[0], count: mostParticipantsRes.rows[0].count };
+            if (mostParticipantsData.rows.length > 0) {
+                records.mostParticipantsAuction = { ...mostParticipantsData.rows[0], count: mostParticipantsRes.rows[0].count };
+            }
         }
 
-        // 3-4. 역대 최고의 인기 광고 (시뮬레이션)
-        const allTimePopularRes = await db.query("SELECT a.id, a.final_bid, ad.content_url FROM auctions a LEFT JOIN ad_content ad ON a.id = ad.auction_id WHERE a.status IN ('completed', 'approved') ORDER BY RANDOM() LIMIT 1");
-        records.allTimePopular = allTimePopularRes.rows[0];
+        // 3-4. 역대 최고의 인기 광고
+        const allTimePopularRes = await db.query(`
+            SELECT a.id, a.final_bid, ad.content_url, ad.likes 
+            FROM auctions a
+            JOIN ad_content ad ON a.id = ad.auction_id
+            WHERE a.status IN ('completed', 'approved') 
+            ORDER BY ad.likes DESC NULLS LAST, a.final_bid DESC 
+            LIMIT 1
+        `);
+        if (allTimePopularRes.rows.length > 0) {
+            records.allTimePopular = allTimePopularRes.rows[0];
+        }
 
         // 3-5. 마지막 1시간의 광란
         const finalHourFrenzyRes = await db.query(`
@@ -561,7 +583,9 @@ app.get('/api/archive', async (req, res) => {
         if (finalHourFrenzyRes.rows.length > 0) {
             const frenzyId = finalHourFrenzyRes.rows[0].auction_id;
             const frenzyData = await db.query("SELECT a.id, a.final_bid, ad.content_url FROM auctions a LEFT JOIN ad_content ad ON a.id = ad.auction_id WHERE a.id = $1", [frenzyId]);
-            records.finalHourFrenzy = { ...frenzyData.rows[0], count: finalHourFrenzyRes.rows[0].count };
+            if (frenzyData.rows.length > 0) {
+                records.finalHourFrenzy = { ...frenzyData.rows[0], count: finalHourFrenzyRes.rows[0].count };
+            }
         }
 
         res.json({
