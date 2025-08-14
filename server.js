@@ -483,7 +483,7 @@ app.post('/api/auctions/:auctionId/refund', authenticateToken, async (req, res) 
 
         const auction = auctionResult.rows[0];
         const auctionDate = new Date(auction.id);
-        const refundDeadline = new Date(auctionDate.getFullYear(), auctionDate.getMonth(), auctionDate.getDate(), 17, 0, 0);
+        const refundDeadline = new Date(auctionDate.getFullYear(), auctionDate.getMonth(), auctionDate.getDate() - 1, 17, 0, 0);
         if (new Date() > refundDeadline) throw new Error('환불 가능한 시간이 지났습니다 (당일 17시까지).');
 
         const paymentKey = auction.payment_key;
