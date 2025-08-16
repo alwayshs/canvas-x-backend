@@ -467,29 +467,29 @@ app.post('/api/payments/confirm', authenticateToken, async (req, res) => {
 });
 
 // --- 4. 낙찰 포기 및 환불 API (수정) ---
-// --- 낙찰 포기 API ---
+// 낙찰 포기 API (결제 전)
 app.post('/api/auctions/:auctionId/cancel', authenticateToken, async (req, res) => {
     const { auctionId } = req.params;
     const { id: userId } = req.user;
     const client = await db.connect();
     try {
         await client.query('BEGIN');
-        
-        // 1. 먼저, 현재 경매의 모든 정보를 가져와 'auction' 변수에 저장합니다.
         const auctionResult = await client.query(
             "SELECT * FROM auctions WHERE id = $1 AND final_winner_id = $2 AND status = 'ended' FOR UPDATE",
             [auctionId, userId]
         );
         if (auctionResult.rows.length === 0) throw new Error('낙찰을 포기할 수 없는 상태입니다.');
-        
-        const auction = auctionResult.rows[0]; // <- 여기에 이전 낙찰자 ID가 안전하게 저장됩니다.
 
-        // 2. 그 다음, 경매 상태를 'cancelled'로 변경합니다.
+        // FIX: 환불과 동일한 시간 제한 로직 추가
+        const auction = auctionResult.rows[0];
+        const auctionDate = new Date(auction.id);
+        const cancelDeadline = new Date(auctionDate.getFullYear(), auctionDate.getMonth(), auctionDate.getDate() - 1, 17, 0, 0); // 당일 17:00
+        if (new Date() > cancelDeadline) {
+            throw new Error('낙찰 포기 가능한 시간이 지났습니다 (광고 게시일 17시까지).');
+        }
+
         await client.query("UPDATE auctions SET status = 'cancelled' WHERE id = $1", [auctionId]);
-        
-        // 3. 마지막으로, 아까 저장해두었던 'auction.final_winner_id'를 이용해 차순위 입찰자를 찾습니다.
-        await offerToSecondBidder(client, auctionId, [auction.final_winner_id]);
-        
+        await offerToSecondBidder(client, auctionId);
         await client.query('COMMIT');
         res.status(200).json({ message: '낙찰을 포기했습니다. 차순위 입찰자에게 기회가 넘어갑니다.' });
     } catch (error) {
